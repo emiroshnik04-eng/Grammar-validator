@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git config:*)",
+      "Bash(git commit:*)",
+      "Bash(gh:*)",
+      "Bash(pip install:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)"
     ]
   }
 }
