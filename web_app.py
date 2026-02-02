@@ -217,22 +217,24 @@ HTML_TEMPLATE = r"""
     <title>Catalog Validator</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --md-primary: #6750A4;
-            --md-primary-container: #EADDFF;
-            --md-surface: #FFFBFE;
-            --md-surface-variant: #E7E0EC;
-            --md-on-surface: #1C1B1F;
-            --md-on-surface-variant: #49454F;
-            --md-error: #BA1A1A;
-            --md-error-container: #FFDAD6;
-            --md-success: #146B3A;
-            --md-success-container: #A8F3C5;
-            --md-elevation-1: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
-            --md-elevation-2: 0 3px 6px rgba(0,0,0,0.16), 0 3px 6px rgba(0,0,0,0.23);
-            --md-elevation-3: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+            --primary: #22CA46;
+            --primary-light: #7ED321;
+            --primary-dark: #43D262;
+            --secondary: #8A8D93;
+            --success: #56CA00;
+            --error: #FF4C51;
+            --warning: #FFB400;
+            --info: #16B1FF;
+            --background: #F4F5FA;
+            --paper: #FFFFFF;
+            --text-primary: rgba(58, 53, 65, 0.87);
+            --text-secondary: rgba(58, 53, 65, 0.68);
+            --divider: rgba(58, 53, 65, 0.12);
+            --shadow-3: 0px 3px 6px rgba(58, 53, 65, 0.16), 0px 3px 6px rgba(58, 53, 65, 0.23);
+            --shadow-6: 0px 6px 12px rgba(58, 53, 65, 0.18), 0px 6px 12px rgba(58, 53, 65, 0.24);
         }
 
         * {
@@ -242,8 +244,8 @@ HTML_TEMPLATE = r"""
         }
 
         body {
-            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--background);
             min-height: 100vh;
             display: flex;
             justify-content: center;
@@ -252,52 +254,53 @@ HTML_TEMPLATE = r"""
         }
 
         .container {
-            background: var(--md-surface);
+            background: var(--paper);
             border-radius: 16px;
-            box-shadow: var(--md-elevation-3);
-            padding: 40px;
+            box-shadow: var(--shadow-6);
+            padding: 20px;
             max-width: 600px;
             width: 100%;
         }
 
         h1 {
-            color: var(--md-on-surface);
-            margin-bottom: 10px;
-            font-size: 28px;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            font-size: 1.125rem;
             font-weight: 500;
-            letter-spacing: 0;
+            line-height: 1.6;
+            letter-spacing: 0.15px;
         }
 
         .subtitle {
-            color: var(--md-on-surface-variant);
-            margin-bottom: 30px;
-            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            font-size: 0.875rem;
             font-weight: 400;
-            letter-spacing: 0.1px;
+            line-height: 1.71;
+            letter-spacing: 0.15px;
         }
 
         .upload-area {
-            border: 2px dashed var(--md-primary);
-            border-radius: 12px;
+            border: 2px dashed var(--primary);
+            border-radius: 16px;
             padding: 40px 20px;
             text-align: center;
-            background: var(--md-primary-container);
+            background: rgba(34, 202, 70, 0.08);
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             cursor: pointer;
             margin-bottom: 20px;
         }
 
         .upload-area:hover {
-            border-color: var(--md-primary);
-            background: var(--md-surface-variant);
-            box-shadow: var(--md-elevation-1);
+            border-color: var(--primary-dark);
+            background: rgba(34, 202, 70, 0.12);
+            transform: translateY(-2px);
         }
 
         .upload-area.dragover {
-            border-color: var(--md-primary);
-            background: var(--md-surface-variant);
-            transform: scale(1.02);
-            box-shadow: var(--md-elevation-2);
+            border-color: var(--primary-dark);
+            background: rgba(34, 202, 70, 0.16);
+            transform: scale(1.01);
         }
 
         .upload-icon {
@@ -310,9 +313,9 @@ HTML_TEMPLATE = r"""
         }
 
         .file-info {
-            background: var(--md-success-container);
-            padding: 15px;
-            border-radius: 12px;
+            background: rgba(86, 202, 0, 0.12);
+            padding: 16px;
+            border-radius: 16px;
             margin-bottom: 20px;
             display: none;
         }
@@ -323,55 +326,59 @@ HTML_TEMPLATE = r"""
 
         .file-name {
             font-weight: 500;
-            color: var(--md-success);
-            margin-bottom: 5px;
+            color: var(--success);
+            margin-bottom: 4px;
+            font-size: 0.875rem;
+            letter-spacing: 0.15px;
         }
 
         .file-size {
-            color: var(--md-on-surface-variant);
-            font-size: 14px;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            letter-spacing: 0.4px;
         }
 
         .btn {
             width: 100%;
-            padding: 12px 24px;
+            padding: 7.5px 22px;
             border: none;
-            border-radius: 20px;
-            font-size: 16px;
+            border-radius: 50px;
+            font-size: 0.9375rem;
             font-weight: 500;
-            letter-spacing: 0.1px;
+            line-height: 1.71;
+            letter-spacing: 0.3px;
             cursor: pointer;
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             margin-bottom: 10px;
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Inter', sans-serif;
         }
 
         .btn-primary {
-            background: var(--md-primary);
+            background: var(--primary);
             color: white;
-            box-shadow: var(--md-elevation-1);
+            box-shadow: var(--shadow-3);
         }
 
         .btn-primary:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: var(--md-elevation-2);
+            background: var(--primary-dark);
+            box-shadow: 0px 4px 8px rgba(34, 202, 70, 0.3), 0px 4px 8px rgba(34, 202, 70, 0.25);
         }
 
         .btn-primary:active:not(:disabled) {
-            transform: translateY(0);
-            box-shadow: var(--md-elevation-1);
+            transform: translateY(1px);
+            box-shadow: var(--shadow-3);
         }
 
         .btn-primary:disabled {
-            opacity: 0.38;
+            opacity: 0.45;
             cursor: not-allowed;
             box-shadow: none;
         }
 
         .btn-success {
-            background: var(--md-success);
+            background: var(--success);
             color: white;
-            box-shadow: var(--md-elevation-1);
+            box-shadow: var(--shadow-3);
             display: none;
         }
 
@@ -380,16 +387,15 @@ HTML_TEMPLATE = r"""
         }
 
         .btn-success:hover {
-            background: #0d5e2f;
-            transform: translateY(-1px);
-            box-shadow: var(--md-elevation-2);
+            background: #4DB800;
+            box-shadow: 0px 4px 8px rgba(86, 202, 0, 0.3), 0px 4px 8px rgba(86, 202, 0, 0.25);
         }
 
         .progress-bar {
             width: 100%;
-            height: 32px;
-            background: var(--md-surface-variant);
-            border-radius: 16px;
+            height: 8px;
+            background: rgba(58, 53, 65, 0.08);
+            border-radius: 50px;
             overflow: hidden;
             margin-bottom: 20px;
             display: none;
@@ -401,26 +407,35 @@ HTML_TEMPLATE = r"""
 
         .progress-fill {
             height: 100%;
-            background: var(--md-primary);
+            background: var(--primary);
             width: 0%;
             transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
+            border-radius: 50px;
+        }
+
+        .progress-text {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
             font-weight: 500;
-            font-size: 13px;
-            letter-spacing: 0.1px;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .progress-text.show {
+            display: block;
         }
 
         .status {
             text-align: center;
-            padding: 15px;
-            border-radius: 12px;
+            padding: 12px 16px;
+            border-radius: 16px;
             margin-bottom: 20px;
             display: none;
             font-weight: 400;
-            letter-spacing: 0.1px;
+            font-size: 0.875rem;
+            line-height: 1.71;
+            letter-spacing: 0.15px;
         }
 
         .status.show {
@@ -428,32 +443,33 @@ HTML_TEMPLATE = r"""
         }
 
         .status.success {
-            background: var(--md-success-container);
-            color: var(--md-success);
+            background: rgba(86, 202, 0, 0.12);
+            color: var(--success);
         }
 
         .status.error {
-            background: var(--md-error-container);
-            color: var(--md-error);
+            background: rgba(255, 76, 81, 0.12);
+            color: var(--error);
         }
 
         .status.processing {
-            background: var(--md-primary-container);
-            color: var(--md-primary);
+            background: rgba(34, 202, 70, 0.12);
+            color: var(--primary);
         }
 
         .features {
-            margin-top: 30px;
-            padding-top: 30px;
-            border-top: 1px solid var(--md-surface-variant);
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--divider);
         }
 
         .features h3 {
-            color: var(--md-on-surface);
-            font-size: 16px;
+            color: var(--text-primary);
+            font-size: 1rem;
             font-weight: 500;
-            margin-bottom: 15px;
-            letter-spacing: 0.1px;
+            margin-bottom: 12px;
+            line-height: 1.6;
+            letter-spacing: 0.15px;
         }
 
         .features ul {
@@ -461,17 +477,18 @@ HTML_TEMPLATE = r"""
         }
 
         .features li {
-            padding: 8px 0;
-            color: var(--md-on-surface-variant);
-            font-size: 14px;
+            padding: 6px 0;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
             font-weight: 400;
-            letter-spacing: 0.1px;
+            line-height: 1.71;
+            letter-spacing: 0.15px;
         }
 
         .features li:before {
             content: "✓ ";
-            color: var(--md-success);
-            font-weight: 500;
+            color: var(--success);
+            font-weight: 600;
             margin-right: 8px;
         }
     </style>
@@ -494,8 +511,9 @@ HTML_TEMPLATE = r"""
             <div class="file-size" id="fileSize"></div>
         </div>
 
+        <div class="progress-text" id="progressText">0%</div>
         <div class="progress-bar" id="progressBar">
-            <div class="progress-fill" id="progressFill">0%</div>
+            <div class="progress-fill" id="progressFill"></div>
         </div>
 
         <div class="status" id="status"></div>
@@ -531,6 +549,7 @@ HTML_TEMPLATE = r"""
         const downloadBtn = document.getElementById('downloadBtn');
         const progressBar = document.getElementById('progressBar');
         const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
         const status = document.getElementById('status');
 
         let selectedFile = null;
@@ -595,7 +614,7 @@ HTML_TEMPLATE = r"""
 
         function updateProgress(percent) {
             progressFill.style.width = percent + '%';
-            progressFill.textContent = percent + '%';
+            progressText.textContent = percent + '%';
         }
 
         // Process file
@@ -607,6 +626,7 @@ HTML_TEMPLATE = r"""
 
             processBtn.disabled = true;
             progressBar.classList.add('show');
+            progressText.classList.add('show');
             downloadBtn.classList.remove('show');
             updateProgress(0);
             showStatus('processing', 'Processing file... This may take several minutes.');
@@ -646,6 +666,7 @@ HTML_TEMPLATE = r"""
                         eventSource.close();
                         setTimeout(() => {
                             progressBar.classList.remove('show');
+                            progressText.classList.remove('show');
                             showStatus('success', '✓ Validation completed! Errors found: ' + (result.errors_found || 'N/A'));
                             downloadBtn.classList.add('show');
                         }, 300);
@@ -664,6 +685,7 @@ HTML_TEMPLATE = r"""
                     // Only show error if download button not visible
                     if (!downloadBtn.classList.contains('show')) {
                         progressBar.classList.remove('show');
+                        progressText.classList.remove('show');
                         showStatus('error', '✗ Connection error during processing');
                         processBtn.disabled = false;
                     }
@@ -671,6 +693,7 @@ HTML_TEMPLATE = r"""
 
             } catch (error) {
                 progressBar.classList.remove('show');
+                progressText.classList.remove('show');
 
                 // Smart error analysis button
                 const errorHtml = `
