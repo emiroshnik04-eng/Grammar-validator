@@ -73,3 +73,95 @@ The system SHALL detect spelling and grammar errors using LanguageTool and SHALL
 - **WHEN** validation runs
 - **THEN** no grammar error is reported
 - **AND** cell is not highlighted for grammar issues
+
+### Requirement: Second Word Capitalization in Compound Phrases
+The system SHALL lowercase the second word in compound phrases UNLESS the word is a proper noun, brand name, or abbreviation.
+
+#### Scenario: Common compound phrase
+- **GIVEN** compound phrase "Другой красный Цвет"
+- **WHEN** validation runs
+- **THEN** system suggests "Другой красный цвет" (second word lowercased)
+
+#### Scenario: Proper noun preserved
+- **GIVEN** compound phrase "Другой iPhone"
+- **WHEN** validation runs
+- **THEN** no change suggested (iPhone is a brand name)
+
+#### Scenario: Abbreviation preserved
+- **GIVEN** compound phrase "Другая USB мышь"
+- **WHEN** validation runs
+- **THEN** no change suggested (USB is an abbreviation)
+
+#### Scenario: Category name with compound words
+- **GIVEN** category "Детские Игрушки"
+- **WHEN** validation runs
+- **THEN** system suggests "Детские игрушки" (second word lowercased)
+
+### Requirement: Improved "Другой" Pattern Morphology
+The system SHALL determine the grammatical gender of "Другой/Другая/Другое" based on the head noun of the associated parameter phrase, not just the first word.
+
+#### Scenario: Compound parameter with head noun at end
+- **GIVEN** parameter "большой красный мяч" (masculine head noun "мяч")
+- **WHEN** "Другой" pattern is applied
+- **THEN** system uses "Другой большой красный мяч" (masculine form)
+
+#### Scenario: Compound parameter with adjectives
+- **GIVEN** parameter "красная спортивная обувь" (feminine head noun "обувь")
+- **WHEN** "Другой" pattern is applied
+- **THEN** system uses "Другая красная спортивная обувь" (feminine form)
+
+#### Scenario: Simple parameter
+- **GIVEN** parameter "цвет" (masculine noun)
+- **WHEN** "Другой" pattern is applied
+- **THEN** system uses "Другой цвет" (masculine form)
+
+### Requirement: Results Filtering
+The system SHALL output ONLY rows that contain corrections or errors in the validated result file.
+
+#### Scenario: Mixed valid and invalid rows
+- **GIVEN** dataset with 1000 rows where 50 rows have errors
+- **WHEN** validation completes
+- **THEN** output file contains exactly 50 rows
+- **AND** all 50 rows have at least one `__correct` column with non-empty value
+
+#### Scenario: All rows valid
+- **GIVEN** dataset with 100 rows where all data is correct
+- **WHEN** validation completes
+- **THEN** output file contains 0 rows
+- **OR** system returns message indicating no errors found
+
+#### Scenario: Row with multiple errors
+- **GIVEN** row with errors in 3 different columns
+- **WHEN** validation completes
+- **THEN** row is included in output exactly once
+- **AND** all 3 corrections are shown in respective `__correct` columns
+
+### Requirement: Real-time Progress Tracking
+The system SHALL provide real-time progress updates via Server-Sent Events (SSE) during validation processing.
+
+#### Scenario: Large file processing
+- **GIVEN** CSV file with 10000 rows being processed
+- **WHEN** validation starts
+- **THEN** client receives SSE progress updates every 500ms
+- **AND** progress shows percentage from 0% to 100%
+- **AND** status messages describe current operation
+
+#### Scenario: Progress stages
+- **GIVEN** validation in progress
+- **WHEN** client connects to SSE endpoint
+- **THEN** progress updates include stages: "Reading file", "Parsing CSV", "Validating data", "Saving results", "Counting errors"
+- **AND** each stage has associated progress percentage
+
+#### Scenario: Error during processing
+- **GIVEN** validation encounters error at 45% progress
+- **WHEN** error occurs
+- **THEN** SSE sends error status with error message
+- **AND** client connection closes gracefully
+- **AND** progress bar shows error state
+
+#### Scenario: Successful completion
+- **GIVEN** validation completes successfully
+- **WHEN** progress reaches 100%
+- **THEN** SSE sends "completed" status
+- **AND** client receives final statistics (rows processed, errors found)
+- **AND** client connection closes gracefully

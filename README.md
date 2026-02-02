@@ -22,12 +22,16 @@
 
 ## Возможности
 
+- ✅ **Real-time progress tracking** - SSE-based progress bar with live percentage updates
+- ✅ **Smart filtering** - Results contain only corrected rows (no unchanged data)
+- ✅ **English Material Design UI** - Modern, responsive interface with Material Design 3
+- ✅ **Improved morphology** - Better compound phrase handling with head noun detection
+- ✅ **Second word capitalization** - Smart handling of compound phrases (preserves proper nouns/abbreviations)
 - ✅ **Орфография и грамматика** - проверка через LanguageTool
 - ✅ **Умное определение множественного числа** - не преобразует "Детский мир" в "Детские миры"
 - ✅ **Единообразие регистра** - проверка согласованности в рамках одного параметра
 - ✅ **Морфологический анализ** - pymorphy3 для русского языка
 - ✅ **LLM-анализ категорий** - опциональная семантическая проверка через OpenAI API
-- ✅ **Веб-интерфейс** - удобная загрузка и скачивание результатов
 
 ## 🚀 Быстрый старт
 
@@ -142,11 +146,13 @@ uvicorn semantic_service:app --reload
 - **Множественное число**: "Игрушка" → "Игрушки"
 - **Исключения**: имена собственные ("Детский мир"), неисчисляемые ("транспорт")
 - **Орфография**: проверка через LanguageTool
+- **Второе слово**: "Детские Игрушки" → "Детские игрушки" (unless proper noun/abbreviation)
 
 ### 2. Параметры
 
 - **Единообразие регистра**: все значения в рамках `param_id` должны быть в одном регистре
-- **Паттерн "Другой"**: согласование по роду/числу ("Другой цвет", "Другая форма")
+- **Паттерн "Другой"**: согласование по роду/числу основного существительного ("Другой красный мяч", "Другая красная обувь")
+- **Compound capitalization**: "Другой красный Цвет" → "Другой красный цвет" (preserves brands like "Другой iPhone")
 - **Единственное число**: значения характеристик в единственном числе
 - **Часть речи**: единообразие (прилагательные или существительные)
 
@@ -156,6 +162,14 @@ uvicorn semantic_service:app --reload
 - Бренды с латиницей: "Apple", "iPhone 15"
 - Составные названия: "Детский мир", "Красная площадь"
 - Известные места из списка `_KNOWN_PROPER_NOUNS`
+- Аббревиатуры: "USB", "DVD", "LED"
+
+### 4. Фильтрация результатов
+
+Выходной файл содержит **только строки с ошибками**:
+- Строки без исправлений автоматически исключаются
+- Это ускоряет работу менеджеров по контролю качества
+- Количество ошибок отображается в веб-интерфейсе
 
 ## 🛠️ API Endpoints (web_app.py)
 
@@ -168,9 +182,22 @@ uvicorn semantic_service:app --reload
 ```json
 {
   "status": "success",
+  "task_id": "uuid-here",
   "filename": "checked_file.xlsx",
   "rows_processed": 1500,
   "errors_found": 42
+}
+```
+
+### GET `/api/progress/{task_id}`
+Real-time progress updates via Server-Sent Events (SSE).
+
+**Response:** Stream of SSE events
+```json
+{
+  "progress": 50,
+  "status": "processing",
+  "message": "Validating data..."
 }
 ```
 
@@ -276,5 +303,12 @@ for csv_file in glob.glob("data/*.csv"):
 
 ---
 
-**Версия:** 2.0
-**Последнее обновление:** 2025-12-18
+**Версия:** 3.0
+**Последнее обновление:** 2026-02-02
+
+### v3.0 Highlights (2026-02-02)
+- ✨ Real-time SSE progress tracking with live percentage updates
+- ✨ English Material Design UI
+- ✨ Smart results filtering (only rows with errors)
+- ✨ Improved second word capitalization handling
+- ✨ Better "Другой" pattern morphology with head noun detection

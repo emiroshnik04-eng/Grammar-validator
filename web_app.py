@@ -7,12 +7,14 @@
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, AsyncGenerator, Dict
 import logging
 import json
+import uuid
+import asyncio
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import pandas as pd
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -61,6 +63,26 @@ app = FastAPI(title="Catalog Validator", description="Инструмент пр�
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Progress tracker for SSE
+progress_tracker: Dict[str, Dict] = {}
+
+
+async def progress_generator(task_id: str) -> AsyncGenerator[str, None]:
+    """SSE generator for real-time progress updates"""
+    while True:
+        if task_id not in progress_tracker:
+            break
+        progress = progress_tracker[task_id]
+        data = json.dumps({
+            "progress": progress.get("progress", 0),
+            "status": progress.get("status", "processing"),
+            "message": progress.get("message", "")
+        })
+        yield f"data: {data}\n\n"
+        if progress.get("status") in ["completed", "error"]:
+            break
+        await asyncio.sleep(0.5)
 
 
 # Модели для LLM API
@@ -185,15 +207,34 @@ async def ask_llm_error(error_traceback: str) -> str:
         return f"Не удалось подключиться к AI для анализа ошибки: {e}"
 
 
-# HTML страница с интерфейсом
+# HTML page with interface
 HTML_TEMPLATE = r"""
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Проверка каталога товаров</title>
+    <title>Catalog Validator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --md-primary: #6750A4;
+            --md-primary-container: #EADDFF;
+            --md-surface: #FFFBFE;
+            --md-surface-variant: #E7E0EC;
+            --md-on-surface: #1C1B1F;
+            --md-on-surface-variant: #49454F;
+            --md-error: #BA1A1A;
+            --md-error-container: #FFDAD6;
+            --md-success: #146B3A;
+            --md-success-container: #A8F3C5;
+            --md-elevation-1: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+            --md-elevation-2: 0 3px 6px rgba(0,0,0,0.16), 0 3px 6px rgba(0,0,0,0.23);
+            --md-elevation-3: 0 10px 20px rgba(0,0,0,0.19), 0 6px 6px rgba(0,0,0,0.23);
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -201,7 +242,7 @@ HTML_TEMPLATE = r"""
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
@@ -211,46 +252,52 @@ HTML_TEMPLATE = r"""
         }
 
         .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            background: var(--md-surface);
+            border-radius: 16px;
+            box-shadow: var(--md-elevation-3);
             padding: 40px;
             max-width: 600px;
             width: 100%;
         }
 
         h1 {
-            color: #333;
+            color: var(--md-on-surface);
             margin-bottom: 10px;
             font-size: 28px;
+            font-weight: 500;
+            letter-spacing: 0;
         }
 
         .subtitle {
-            color: #666;
+            color: var(--md-on-surface-variant);
             margin-bottom: 30px;
             font-size: 14px;
+            font-weight: 400;
+            letter-spacing: 0.1px;
         }
 
         .upload-area {
-            border: 2px dashed #667eea;
-            border-radius: 10px;
+            border: 2px dashed var(--md-primary);
+            border-radius: 12px;
             padding: 40px 20px;
             text-align: center;
-            background: #f8f9ff;
-            transition: all 0.3s ease;
+            background: var(--md-primary-container);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             cursor: pointer;
             margin-bottom: 20px;
         }
 
         .upload-area:hover {
-            border-color: #764ba2;
-            background: #f0f1ff;
+            border-color: var(--md-primary);
+            background: var(--md-surface-variant);
+            box-shadow: var(--md-elevation-1);
         }
 
         .upload-area.dragover {
-            border-color: #764ba2;
-            background: #e8e9ff;
+            border-color: var(--md-primary);
+            background: var(--md-surface-variant);
             transform: scale(1.02);
+            box-shadow: var(--md-elevation-2);
         }
 
         .upload-icon {
@@ -263,9 +310,9 @@ HTML_TEMPLATE = r"""
         }
 
         .file-info {
-            background: #e8f5e9;
+            background: var(--md-success-container);
             padding: 15px;
-            border-radius: 8px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: none;
         }
@@ -275,46 +322,56 @@ HTML_TEMPLATE = r"""
         }
 
         .file-name {
-            font-weight: 600;
-            color: #2e7d32;
+            font-weight: 500;
+            color: var(--md-success);
             margin-bottom: 5px;
         }
 
         .file-size {
-            color: #666;
+            color: var(--md-on-surface-variant);
             font-size: 14px;
         }
 
         .btn {
             width: 100%;
-            padding: 15px;
+            padding: 12px 24px;
             border: none;
-            border-radius: 8px;
+            border-radius: 20px;
             font-size: 16px;
-            font-weight: 600;
+            font-weight: 500;
+            letter-spacing: 0.1px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             margin-bottom: 10px;
+            font-family: 'Roboto', sans-serif;
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--md-primary);
             color: white;
+            box-shadow: var(--md-elevation-1);
         }
 
         .btn-primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            transform: translateY(-1px);
+            box-shadow: var(--md-elevation-2);
+        }
+
+        .btn-primary:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow: var(--md-elevation-1);
         }
 
         .btn-primary:disabled {
-            opacity: 0.5;
+            opacity: 0.38;
             cursor: not-allowed;
+            box-shadow: none;
         }
 
         .btn-success {
-            background: #4caf50;
+            background: var(--md-success);
             color: white;
+            box-shadow: var(--md-elevation-1);
             display: none;
         }
 
@@ -323,16 +380,16 @@ HTML_TEMPLATE = r"""
         }
 
         .btn-success:hover {
-            background: #45a049;
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(76, 175, 80, 0.4);
+            background: #0d5e2f;
+            transform: translateY(-1px);
+            box-shadow: var(--md-elevation-2);
         }
 
         .progress-bar {
             width: 100%;
-            height: 6px;
-            background: #e0e0e0;
-            border-radius: 10px;
+            height: 32px;
+            background: var(--md-surface-variant);
+            border-radius: 16px;
             overflow: hidden;
             margin-bottom: 20px;
             display: none;
@@ -344,23 +401,26 @@ HTML_TEMPLATE = r"""
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            background: var(--md-primary);
             width: 0%;
-            transition: width 0.3s ease;
-            animation: progress 2s ease-in-out infinite;
-        }
-
-        @keyframes progress {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(400%); }
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 500;
+            font-size: 13px;
+            letter-spacing: 0.1px;
         }
 
         .status {
             text-align: center;
             padding: 15px;
-            border-radius: 8px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: none;
+            font-weight: 400;
+            letter-spacing: 0.1px;
         }
 
         .status.show {
@@ -368,30 +428,32 @@ HTML_TEMPLATE = r"""
         }
 
         .status.success {
-            background: #e8f5e9;
-            color: #2e7d32;
+            background: var(--md-success-container);
+            color: var(--md-success);
         }
 
         .status.error {
-            background: #ffebee;
-            color: #c62828;
+            background: var(--md-error-container);
+            color: var(--md-error);
         }
 
         .status.processing {
-            background: #e3f2fd;
-            color: #1565c0;
+            background: var(--md-primary-container);
+            color: var(--md-primary);
         }
 
         .features {
             margin-top: 30px;
             padding-top: 30px;
-            border-top: 1px solid #e0e0e0;
+            border-top: 1px solid var(--md-surface-variant);
         }
 
         .features h3 {
-            color: #333;
+            color: var(--md-on-surface);
             font-size: 16px;
+            font-weight: 500;
             margin-bottom: 15px;
+            letter-spacing: 0.1px;
         }
 
         .features ul {
@@ -400,27 +462,29 @@ HTML_TEMPLATE = r"""
 
         .features li {
             padding: 8px 0;
-            color: #666;
+            color: var(--md-on-surface-variant);
             font-size: 14px;
+            font-weight: 400;
+            letter-spacing: 0.1px;
         }
 
         .features li:before {
             content: "✓ ";
-            color: #4caf50;
-            font-weight: bold;
+            color: var(--md-success);
+            font-weight: 500;
             margin-right: 8px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔍 Проверка каталога товаров</h1>
-        <p class="subtitle">Загрузите CSV файл для автоматической проверки качества данных</p>
+        <h1>🔍 Catalog Validator</h1>
+        <p class="subtitle">Upload CSV file for automated data quality validation</p>
 
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
-            <p><strong>Нажмите для выбора файла</strong> или перетащите его сюда</p>
-            <p style="color: #999; font-size: 14px; margin-top: 10px;">CSV файл с разделителем ";"</p>
+            <p><strong>Click to select file</strong> or drag and drop it here</p>
+            <p style="color: #999; font-size: 14px; margin-top: 10px;">CSV file with ";" delimiter</p>
         </div>
 
         <input type="file" id="fileInput" accept=".csv">
@@ -431,28 +495,28 @@ HTML_TEMPLATE = r"""
         </div>
 
         <div class="progress-bar" id="progressBar">
-            <div class="progress-fill"></div>
+            <div class="progress-fill" id="progressFill">0%</div>
         </div>
 
         <div class="status" id="status"></div>
 
         <button class="btn btn-primary" id="processBtn" disabled>
-            Запустить проверку
+            Start Validation
         </button>
 
         <button class="btn btn-success" id="downloadBtn">
-            📥 Скачать результат
+            📥 Download Results
         </button>
 
         <div class="features">
-            <h3>Что проверяется:</h3>
+            <h3>What's validated:</h3>
             <ul>
-                <li>Орфография и грамматика (LanguageTool)</li>
-                <li>Множественное число категорий</li>
-                <li>Умное определение имён собственных ("Детский мир")</li>
-                <li>Единообразие регистра в параметрах</li>
-                <li>Морфологические правила русского языка</li>
-                <li>Паттерн "Другой/Другое/Другая + параметр"</li>
+                <li>Spelling and grammar (LanguageTool)</li>
+                <li>Category plural forms</li>
+                <li>Smart proper noun detection ("Детский мир")</li>
+                <li>Consistent parameter capitalization</li>
+                <li>Russian language morphology rules</li>
+                <li>"Другой/Другое/Другая + parameter" pattern</li>
             </ul>
         </div>
     </div>
@@ -466,6 +530,7 @@ HTML_TEMPLATE = r"""
         const processBtn = document.getElementById('processBtn');
         const downloadBtn = document.getElementById('downloadBtn');
         const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
         const status = document.getElementById('status');
 
         let selectedFile = null;
@@ -502,7 +567,7 @@ HTML_TEMPLATE = r"""
 
         function handleFile(file) {
             if (!file.name.endsWith('.csv')) {
-                showStatus('error', 'Пожалуйста, выберите CSV файл');
+                showStatus('error', 'Please select a CSV file');
                 return;
             }
 
@@ -528,6 +593,11 @@ HTML_TEMPLATE = r"""
             status.textContent = message;
         }
 
+        function updateProgress(percent) {
+            progressFill.style.width = percent + '%';
+            progressFill.textContent = percent + '%';
+        }
+
         // Process file
         processBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
@@ -538,9 +608,11 @@ HTML_TEMPLATE = r"""
             processBtn.disabled = true;
             progressBar.classList.add('show');
             downloadBtn.classList.remove('show');
-            showStatus('processing', 'Обработка файла... Это может занять несколько минут.');
+            updateProgress(0);
+            showStatus('processing', 'Processing file... This may take several minutes.');
 
             try {
+                // Start validation
                 const response = await fetch('/api/validate', {
                     method: 'POST',
                     body: formData
@@ -548,28 +620,67 @@ HTML_TEMPLATE = r"""
 
                 if (!response.ok) {
                     const error = await response.json();
-                    throw new Error(error.detail || 'Ошибка обработки');
+                    throw new Error(error.detail || 'Processing error');
                 }
 
                 const result = await response.json();
+                const taskId = result.task_id;
                 resultFilename = result.filename;
 
-                progressBar.classList.remove('show');
-                showStatus('success', '✓ Проверка завершена! Найдено ошибок: ' + (result.errors_found || 'N/A'));
-                downloadBtn.classList.add('show');
+                // Connect to SSE for progress updates
+                const eventSource = new EventSource('/api/progress/' + taskId);
+
+                eventSource.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+
+                    // Update progress bar
+                    updateProgress(data.progress);
+
+                    // Update status message
+                    if (data.message) {
+                        showStatus('processing', data.message);
+                    }
+
+                    // Handle completion
+                    if (data.status === 'completed') {
+                        eventSource.close();
+                        setTimeout(() => {
+                            progressBar.classList.remove('show');
+                            showStatus('success', '✓ Validation completed! Errors found: ' + (result.errors_found || 'N/A'));
+                            downloadBtn.classList.add('show');
+                        }, 300);
+                    }
+
+                    // Handle errors
+                    if (data.status === 'error') {
+                        eventSource.close();
+                        throw new Error(data.message || 'Processing error');
+                    }
+                };
+
+                eventSource.onerror = (error) => {
+                    eventSource.close();
+                    // If validation completed successfully, onerror might fire on close
+                    // Only show error if download button not visible
+                    if (!downloadBtn.classList.contains('show')) {
+                        progressBar.classList.remove('show');
+                        showStatus('error', '✗ Connection error during processing');
+                        processBtn.disabled = false;
+                    }
+                };
 
             } catch (error) {
                 progressBar.classList.remove('show');
-                
-                // Кнопка умного поиска ошибки
+
+                // Smart error analysis button
                 const errorHtml = `
-                    <div>✗ Ошибка: ${error.message}</div>
+                    <div>✗ Error: ${error.message}</div>
                     <button class="btn btn-primary" style="margin-top: 10px; background: #ff9800;" onclick="analyzeError('${error.message.replace(/'/g, "\\'")}')">
-                        🤖 Спросить AI что это значит
+                        🤖 Ask AI what this means
                     </button>
                     <div id="ai-error-explanation" style="margin-top: 10px; text-align: left; background: #fff3e0; padding: 10px; border-radius: 5px; display: none;"></div>
                 `;
-                
+
                 status.innerHTML = errorHtml;
                 status.className = 'status show error';
                 processBtn.disabled = false;
@@ -580,23 +691,23 @@ HTML_TEMPLATE = r"""
             const explanationBlock = document.getElementById('ai-error-explanation');
             explanationBlock.style.display = 'block';
             explanationBlock.innerHTML = 'Thinking...';
-            
+
             try {
-                const response = await fetch('http://127.0.0.1:8000/analyze-error', {
+                const response = await fetch('/api/analyze-error', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({error_traceback: errorMessage})
                 });
                 const data = await response.json();
-                
-                // Преобразуем markdown в простой HTML (очень базово)
-                let html = data.explanation || 'Не удалось получить объяснение';
+
+                // Convert markdown to simple HTML (very basic)
+                let html = data.explanation || 'Failed to get explanation';
                 html = html.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
                 html = html.replace(/\n/g, '<br>');
-                
+
                 explanationBlock.innerHTML = html;
             } catch (err) {
-                explanationBlock.innerHTML = 'Ошибка связи с AI сервисом: ' + err.message;
+                explanationBlock.innerHTML = 'AI service connection error: ' + err.message;
             }
         }
 
@@ -617,6 +728,20 @@ async def index():
     return HTML_TEMPLATE
 
 
+@app.get("/api/progress/{task_id}")
+async def stream_progress(task_id: str):
+    """SSE endpoint for real-time progress updates"""
+    return StreamingResponse(
+        progress_generator(task_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive"
+        }
+    )
+
+
 @app.post("/api/validate")
 @limiter.limit("5/minute")
 async def validate_catalog(request: Request, file: UploadFile = File(...)):
@@ -625,8 +750,13 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
     Возвращает информацию о результатах проверки.
     Rate limit: максимум 5 запросов в минуту на IP.
     """
+    # Create task ID for progress tracking
+    task_id = str(uuid.uuid4())
+    progress_tracker[task_id] = {"progress": 0, "status": "starting", "message": "Initializing..."}
+
     # Проверка типа файла
     if not file.filename.endswith('.csv'):
+        progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "Invalid file type"}
         raise HTTPException(status_code=400, detail="Пожалуйста, загрузите CSV файл")
 
     # Максимальный размер файла: 100 МБ
@@ -640,6 +770,7 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
 
     try:
         # Читаем и проверяем размер файла
+        progress_tracker[task_id] = {"progress": 10, "status": "processing", "message": "Reading file..."}
         content = await file.read()
         file_size_mb = len(content) / (1024 * 1024)
 
@@ -647,18 +778,21 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
 
         if len(content) > MAX_FILE_SIZE:
             logger.warning(f"Отклонен файл {file.filename}: превышен лимит размера ({file_size_mb:.2f} МБ)")
+            progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "File too large"}
             raise HTTPException(
                 status_code=413,
                 detail=f"Файл слишком большой. Максимальный размер: {MAX_FILE_SIZE // 1024 // 1024} МБ"
             )
 
         # Сохраняем загруженный файл
+        progress_tracker[task_id] = {"progress": 20, "status": "processing", "message": "Saving file..."}
         with open(input_path, "wb") as f:
             f.write(content)
 
         logger.info(f"Начало обработки файла: {file.filename}")
 
         # Читаем CSV с автоматическим определением кодировки
+        progress_tracker[task_id] = {"progress": 30, "status": "processing", "message": "Parsing CSV..."}
         encodings_to_try = ["utf-8", "utf-8-sig", "cp1251", "windows-1251", "latin-1", "iso-8859-1"]
         df = None
         last_error = None
@@ -679,19 +813,23 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
                 continue
 
         if df is None:
+            progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "Failed to parse CSV"}
             raise ValueError(f"Не удалось прочитать файл ни с одной из кодировок: {encodings_to_try}. Последняя ошибка: {last_error}")
 
         logger.debug(f"CSV файл прочитан, строк: {len(df)}, столбцов: {len(df.columns)}")
 
         # Применяем валидацию
+        progress_tracker[task_id] = {"progress": 50, "status": "processing", "message": "Validating data..."}
         df_processed = process_dataframe(df)
 
         logger.debug("Валидация завершена, сохранение результата в Excel")
 
         # Сохраняем результат в Excel
+        progress_tracker[task_id] = {"progress": 80, "status": "processing", "message": "Saving results..."}
         write_with_highlight(df_processed, output_path)
 
         # Подсчитываем количество ошибок (ячейки с исправлениями)
+        progress_tracker[task_id] = {"progress": 90, "status": "processing", "message": "Counting errors..."}
         errors_found = 0
         for col in df_processed.columns:
             if col.endswith("__correct"):
@@ -702,8 +840,11 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
         # Удаляем временный входной файл
         os.remove(input_path)
 
+        progress_tracker[task_id] = {"progress": 100, "status": "completed", "message": "Validation completed"}
+
         return {
             "status": "success",
+            "task_id": task_id,
             "filename": output_filename,
             "rows_processed": len(df_processed),
             "errors_found": int(errors_found),
@@ -713,6 +854,10 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         # Логируем ошибку
         logger.error(f"Ошибка при обработке файла {file.filename}: {str(e)}", exc_info=True)
+
+        # Update progress tracker with error status
+        if task_id in progress_tracker:
+            progress_tracker[task_id] = {"progress": 0, "status": "error", "message": str(e)}
 
         # Очистка временных файлов в случае ошибки
         if os.path.exists(input_path):

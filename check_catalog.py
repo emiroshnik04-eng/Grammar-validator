@@ -353,6 +353,75 @@ def detect_pos(word: str) -> Optional[str]:
     return None
 
 
+def is_proper_noun_word(word: str) -> bool:
+    """
+    Check if word should stay capitalized (abbreviation/brand/proper noun).
+    - All uppercase with length > 1: USB, DVD, BMW
+    - Contains Latin letters: iPhone, MacBook
+    - Mixed case with Latin: iOS, PlayStation
+    """
+    if not word:
+        return False
+
+    # All uppercase abbreviations (USB, DVD, BMW)
+    if word.isupper() and len(word) > 1:
+        return True
+
+    # Contains Latin letters (brands: iPhone, PlayStation, etc.)
+    if any(ch.isascii() and ch.isalpha() for ch in word):
+        return True
+
+    return False
+
+
+def normalize_compound_capitalization(text: str) -> str:
+    """
+    Capitalize first word, lowercase rest unless proper noun/abbreviation.
+
+    Examples:
+        "Другой Красный Цвет" → "Другой красный цвет"
+        "Другой iPhone" → "Другой iPhone"
+        "Другая USB мышь" → "Другая USB мышь"
+    """
+    words = text.split()
+    if len(words) <= 1:
+        return text
+
+    result = [words[0].capitalize()]  # First word always capitalized
+
+    for word in words[1:]:
+        if is_proper_noun_word(word):
+            result.append(word)  # Keep proper nouns as-is
+        else:
+            result.append(word.lower())  # Lowercase everything else
+
+    return " ".join(result)
+
+
+def extract_head_noun(phrase: str) -> str:
+    """
+    Extract grammatical head (main noun) from a phrase.
+    In Russian, the head noun is typically the LAST noun in the phrase.
+
+    Examples:
+        "Цвет корпуса" → "корпуса" (genitive of "корпус")
+        "Материал изготовления" → "изготовления"
+        "Бренд" → "Бренд"
+    """
+    words = phrase.split()
+    if not words:
+        return phrase
+
+    # In Russian, head noun is typically LAST noun in phrase
+    for word in reversed(words):
+        p = _first_parse(word)
+        if p and "NOUN" in p.tag:
+            return word
+
+    # Fallback to first word
+    return words[0]
+
+
 def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, str]]:
     """
     Паттерн «другой/другое/другая/другие ... + <название параметра>»:
@@ -369,8 +438,8 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
         return None
 
     # Морфологический разбор названия параметра
-    # Берём первое слово названия параметра (обычно "Цвет", "Материал" и т.д.)
-    head = param_name.split()[0]
+    # Берём главное (головное) существительное из фразы
+    head = extract_head_noun(param_name)
     p = _first_parse(head)
     if not p:
         correct = f"Другой {param_name}"
@@ -404,8 +473,8 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     else:
         other_word = "Другой"
 
-    # Название параметра оставляем без изменений
-    correct = f"{other_word} {param_name}"
+    # Применяем правильную капитализацию к составной фразе
+    correct = normalize_compound_capitalization(f"{other_word} {param_name}")
     if value != correct:
         return value, correct
     return None
@@ -898,7 +967,23 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 df.at[idx, f"{value_col}__correct"] = corrections[0]
                 df.at[idx, f"{value_col}__comment"] = "; ".join(comments)
 
-    return df
+    # Filter to only rows with corrections
+    def has_corrections(row: pd.Series) -> bool:
+        """Check if row has any corrections in any __correct column"""
+        for col in df.columns:
+            if col.endswith("__correct"):
+                val = str(row[col]).strip()
+                if val and val != "" and not pd.isna(row[col]):
+                    return True
+        return False
+
+    # Apply filter to keep only rows with errors
+    mask = df.apply(has_corrections, axis=1)
+    df_filtered = df[mask].copy()
+
+    logger.info(f"Filtered results: {len(df_filtered)} rows with errors out of {len(df)} total rows")
+
+    return df_filtered
 
 
 def write_with_highlight(df_processed: pd.DataFrame, output_path: str) -> None:
