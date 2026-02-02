@@ -12,6 +12,12 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env
 load_dotenv()
 
+# Импортируем настройку логирования
+from logging_config import setup_logging
+
+# Настраиваем логирование
+logger = setup_logging()
+
 
 """
 Инструмент для проверки выгрузки каталога:
