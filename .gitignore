@@ -1,3 +1,48 @@
+# Секретные данные и конфигурация
+.env
+*.log
+catalog_validator.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Временные файлы
+*.csv
+*.xlsx
+checked_*
+temp_*
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Playwright
 node_modules/

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Button</title>
+    <style>
+        .upload-area {
+            border: 2px dashed blue;
+            padding: 40px;
+            cursor: pointer;
+            text-align: center;
+        }
+        input[type="file"] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Upload Button</h1>
+
+    <div class="upload-area" id="uploadArea">
+        <p>Click here to select file</p>
+    </div>
+
+    <input type="file" id="fileInput" accept=".csv">
+
+    <p id="result"></p>
+
+    <script>
+        console.log('Script loaded');
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const result = document.getElementById('result');
+
+        console.log('uploadArea:', uploadArea);
+        console.log('fileInput:', fileInput);
+
+        uploadArea.addEventListener('click', () => {
+            console.log('Upload area clicked!');
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            console.log('File selected:', e.target.files[0]);
+            if (e.target.files.length > 0) {
+                result.textContent = 'Selected: ' + e.target.files[0].name;
+            }
+        });
+
+        console.log('Event listeners attached');
+    </script>
+</body>
+</html>

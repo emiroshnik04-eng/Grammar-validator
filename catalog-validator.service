@@ -1,0 +1,28 @@
+[Unit]
+Description=Catalog Validator Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/catalog-validator
+Environment="PATH=/opt/catalog-validator/venv/bin"
+Environment="SERVER_HOST=0.0.0.0"
+Environment="SERVER_PORT=8080"
+Environment="ENVIRONMENT=production"
+Environment="OPENAI_API_KEY=your_api_key_here"
+ExecStart=/opt/catalog-validator/venv/bin/python /opt/catalog-validator/web_app.py
+Restart=always
+RestartSec=10
+
+# Логирование
+StandardOutput=append:/var/log/catalog-validator/access.log
+StandardError=append:/var/log/catalog-validator/error.log
+
+# Безопасность
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

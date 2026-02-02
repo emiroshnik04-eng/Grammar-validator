@@ -1,33 +1,198 @@
 """
 Веб-интерфейс для инструмента проверки каталога.
 Позволяет загружать CSV файлы, запускать валидацию и скачивать результаты.
+Включает умный анализ через LLM (OpenAI API).
 """
 
 import os
 import tempfile
 from pathlib import Path
 from typing import Optional
+import logging
+import json
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import pandas as pd
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import httpx
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения
+load_dotenv()
+
+# Импортируем конфигурацию
+try:
+    from config import SERVER_HOST, SERVER_PORT, check_config, ENVIRONMENT
+except ImportError:
+    # Значения по умолчанию если config.py не найден
+    SERVER_HOST = "0.0.0.0"
+    SERVER_PORT = 8080
+    ENVIRONMENT = "production"
+    def check_config():
+        return True
 
 # Импортируем логику валидации из основного скрипта
 from check_catalog import process_dataframe, write_with_highlight, CONFIG
 
+# Импортируем настройку логирования
+from logging_config import setup_logging
 
+# Импортируем модуль анализа ошибок
+from error_analyzer import analyze_error_async, format_error_response
+
+# Настраиваем логирование
+logger = setup_logging()
+
+# Настройки LLM
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
+LLM_API_URL = os.environ.get("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4-turbo")
+
+
+# Инициализация FastAPI
 app = FastAPI(title="Catalog Validator", description="Инструмент проверки качества каталога товаров")
+
+# Инициализация Rate Limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# Модели для LLM API
+class CategoryRequest(BaseModel):
+    name: str
+    path: str
+
+
+class CategoryResponse(BaseModel):
+    should_be_plural: bool
+    suggested_name: str
+    reason: str
+
+
+class ErrorRequest(BaseModel):
+    error_traceback: str
+
+
+SYSTEM_PROMPT_CATEGORY = """
+Ты профессиональный филолог и контент-редактор интернет-каталога.
+
+Твоя задача — решить, как грамотно должно выглядеть название уровня
+категории каталога (единственное или множественное число) и предложить
+корректный вариант.
+
+Учитывай:
+- Категория описывает КЛАСС товаров (не один предмет).
+- Если естественно звучит множественное число — используй его.
+- Если слово по смыслу или по традиции употребляется только в единственном числе
+  (клей, транспорт и т.п. в значении класса), оставь единственное.
+- Сохраняй стилистику каталога, не придумывай лишние слова.
+
+Отвечай строго JSON-объектом с полями:
+- should_be_plural: true/false
+- suggested_name: строка
+- reason: строка с кратким пояснением.
+"""
+
+SYSTEM_PROMPT_ERROR = """
+Ты опытный Python-разработчик.
+Твоя задача — проанализировать текст ошибки (traceback) и дать краткое, понятное объяснение причины и способ исправления.
+Отвечай структурированно, в формате Markdown.
+"""
+
+
+async def ask_llm_category(name: str, path: str) -> Optional[CategoryResponse]:
+    """Запрашивает у LLM рекомендацию по названию категории"""
+    if not LLM_API_KEY:
+        return None
+
+    prompt = (
+        f"Путь категории в каталоге: {path}.\n"
+        f"Текущее название уровня: {name!r}.\n"
+        f"Реши, как оно должно выглядеть в финальном каталоге и нужно ли множественное число.\n"
+        f"Верни JSON с полями should_be_plural, suggested_name, reason."
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                LLM_API_URL,
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json; charset=utf-8"
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT_CATEGORY},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+
+            return CategoryResponse(
+                should_be_plural=bool(parsed.get("should_be_plural", False)),
+                suggested_name=str(parsed.get("suggested_name", name)),
+                reason=str(parsed.get("reason", "")),
+            )
+    except Exception as exc:
+        logger.error(f"Ошибка при запросе к LLM: {exc}")
+        return None
+
+
+async def ask_llm_error(error_traceback: str) -> str:
+    """Анализирует ошибку через LLM"""
+    if not LLM_API_KEY:
+        return "API ключ не настроен, я не могу проанализировать ошибку."
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                LLM_API_URL,
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json; charset=utf-8"
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT_ERROR},
+                        {"role": "user", "content": f"Проанализируй эту ошибку:\n\n{error_traceback}"},
+                    ],
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+    except httpx.TimeoutException:
+        logger.error("Превышено время ожидания при обращении к LLM API")
+        return "Превышено время ожидания ответа от AI сервиса"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Ошибка HTTP при обращении к LLM API: {e.response.status_code}")
+        return f"Ошибка связи с AI сервисом: HTTP {e.response.status_code}"
+    except Exception as e:
+        logger.error(f"Непредвиденная ошибка при анализе: {str(e)}", exc_info=True)
+        return f"Не удалось подключиться к AI для анализа ошибки: {e}"
 
 
 # HTML страница с интерфейсом
-HTML_TEMPLATE = """
+HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Перевірка каталогу товарів</title>
+    <title>Проверка каталога товаров</title>
     <style>
         * {
             margin: 0;
@@ -249,13 +414,13 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>🔍 Перевірка каталогу товарів</h1>
-        <p class="subtitle">Завантажте CSV файл для автоматичної перевірки якості даних</p>
+        <h1>🔍 Проверка каталога товаров</h1>
+        <p class="subtitle">Загрузите CSV файл для автоматической проверки качества данных</p>
 
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
-            <p><strong>Натисніть для вибору файлу</strong> або перетягніть його сюди</p>
-            <p style="color: #999; font-size: 14px; margin-top: 10px;">CSV файл з роздільником ";"</p>
+            <p><strong>Нажмите для выбора файла</strong> или перетащите его сюда</p>
+            <p style="color: #999; font-size: 14px; margin-top: 10px;">CSV файл с разделителем ";"</p>
         </div>
 
         <input type="file" id="fileInput" accept=".csv">
@@ -272,22 +437,22 @@ HTML_TEMPLATE = """
         <div class="status" id="status"></div>
 
         <button class="btn btn-primary" id="processBtn" disabled>
-            Запустити перевірку
+            Запустить проверку
         </button>
 
         <button class="btn btn-success" id="downloadBtn">
-            📥 Завантажити результат
+            📥 Скачать результат
         </button>
 
         <div class="features">
-            <h3>Що перевіряється:</h3>
+            <h3>Что проверяется:</h3>
             <ul>
-                <li>Орфографія та граматика (LanguageTool)</li>
-                <li>Множинне число категорій</li>
-                <li>Розумне визначення власних імен ("Дитячий світ")</li>
-                <li>Однорідність регістру в параметрах</li>
-                <li>Морфологічні правила російської мови</li>
-                <li>Патерн "Інший/Інше/Інша + параметр"</li>
+                <li>Орфография и грамматика (LanguageTool)</li>
+                <li>Множественное число категорий</li>
+                <li>Умное определение имён собственных ("Детский мир")</li>
+                <li>Единообразие регистра в параметрах</li>
+                <li>Морфологические правила русского языка</li>
+                <li>Паттерн "Другой/Другое/Другая + параметр"</li>
             </ul>
         </div>
     </div>
@@ -337,7 +502,7 @@ HTML_TEMPLATE = """
 
         function handleFile(file) {
             if (!file.name.endsWith('.csv')) {
-                showStatus('error', 'Будь ласка, оберіть CSV файл');
+                showStatus('error', 'Пожалуйста, выберите CSV файл');
                 return;
             }
 
@@ -373,7 +538,7 @@ HTML_TEMPLATE = """
             processBtn.disabled = true;
             progressBar.classList.add('show');
             downloadBtn.classList.remove('show');
-            showStatus('processing', 'Обробка файлу... Це може зайняти кілька хвилин.');
+            showStatus('processing', 'Обработка файла... Это может занять несколько минут.');
 
             try {
                 const response = await fetch('/api/validate', {
@@ -383,22 +548,57 @@ HTML_TEMPLATE = """
 
                 if (!response.ok) {
                     const error = await response.json();
-                    throw new Error(error.detail || 'Помилка обробки');
+                    throw new Error(error.detail || 'Ошибка обработки');
                 }
 
                 const result = await response.json();
                 resultFilename = result.filename;
 
                 progressBar.classList.remove('show');
-                showStatus('success', '✓ Перевірка завершена! Знайдено помилок: ' + (result.errors_found || 'N/A'));
+                showStatus('success', '✓ Проверка завершена! Найдено ошибок: ' + (result.errors_found || 'N/A'));
                 downloadBtn.classList.add('show');
 
             } catch (error) {
                 progressBar.classList.remove('show');
-                showStatus('error', '✗ Помилка: ' + error.message);
+                
+                // Кнопка умного поиска ошибки
+                const errorHtml = `
+                    <div>✗ Ошибка: ${error.message}</div>
+                    <button class="btn btn-primary" style="margin-top: 10px; background: #ff9800;" onclick="analyzeError('${error.message.replace(/'/g, "\\'")}')">
+                        🤖 Спросить AI что это значит
+                    </button>
+                    <div id="ai-error-explanation" style="margin-top: 10px; text-align: left; background: #fff3e0; padding: 10px; border-radius: 5px; display: none;"></div>
+                `;
+                
+                status.innerHTML = errorHtml;
+                status.className = 'status show error';
                 processBtn.disabled = false;
             }
         });
+
+        async function analyzeError(errorMessage) {
+            const explanationBlock = document.getElementById('ai-error-explanation');
+            explanationBlock.style.display = 'block';
+            explanationBlock.innerHTML = 'Thinking...';
+            
+            try {
+                const response = await fetch('http://127.0.0.1:8000/analyze-error', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({error_traceback: errorMessage})
+                });
+                const data = await response.json();
+                
+                // Преобразуем markdown в простой HTML (очень базово)
+                let html = data.explanation || 'Не удалось получить объяснение';
+                html = html.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+                html = html.replace(/\n/g, '<br>');
+                
+                explanationBlock.innerHTML = html;
+            } catch (err) {
+                explanationBlock.innerHTML = 'Ошибка связи с AI сервисом: ' + err.message;
+            }
+        }
 
         // Download result
         downloadBtn.addEventListener('click', () => {
@@ -418,14 +618,19 @@ async def index():
 
 
 @app.post("/api/validate")
-async def validate_catalog(file: UploadFile = File(...)):
+@limiter.limit("5/minute")
+async def validate_catalog(request: Request, file: UploadFile = File(...)):
     """
-    API endpoint для валідації завантаженого CSV файлу.
-    Повертає інформацію про результати перевірки.
+    API endpoint для валидации загруженного CSV файла.
+    Возвращает информацию о результатах проверки.
+    Rate limit: максимум 5 запросов в минуту на IP.
     """
-    # Перевірка типу файлу
+    # Проверка типа файла
     if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Будь ласка, завантажте CSV файл")
+        raise HTTPException(status_code=400, detail="Пожалуйста, загрузите CSV файл")
+
+    # Максимальный размер файла: 100 МБ
+    MAX_FILE_SIZE = 100 * 1024 * 1024
 
     # Создаём временные файлы
     temp_dir = tempfile.gettempdir()
@@ -434,21 +639,54 @@ async def validate_catalog(file: UploadFile = File(...)):
     output_path = os.path.join(temp_dir, output_filename)
 
     try:
+        # Читаем и проверяем размер файла
+        content = await file.read()
+        file_size_mb = len(content) / (1024 * 1024)
+
+        logger.info(f"Получен файл: {file.filename}, размер: {file_size_mb:.2f} МБ")
+
+        if len(content) > MAX_FILE_SIZE:
+            logger.warning(f"Отклонен файл {file.filename}: превышен лимит размера ({file_size_mb:.2f} МБ)")
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл слишком большой. Максимальный размер: {MAX_FILE_SIZE // 1024 // 1024} МБ"
+            )
+
         # Сохраняем загруженный файл
         with open(input_path, "wb") as f:
-            content = await file.read()
             f.write(content)
 
-        # Читаем CSV с конфигурацией из check_catalog
-        df = pd.read_csv(
-            input_path,
-            sep=CONFIG["sep"],
-            encoding=CONFIG["encoding"],
-            dtype=str
-        )
+        logger.info(f"Начало обработки файла: {file.filename}")
+
+        # Читаем CSV с автоматическим определением кодировки
+        encodings_to_try = ["utf-8", "utf-8-sig", "cp1251", "windows-1251", "latin-1", "iso-8859-1"]
+        df = None
+        last_error = None
+
+        for encoding in encodings_to_try:
+            try:
+                df = pd.read_csv(
+                    input_path,
+                    sep=CONFIG["sep"],
+                    encoding=encoding,
+                    dtype=str
+                )
+                logger.info(f"CSV файл успешно прочитан с кодировкой: {encoding}")
+                break
+            except Exception as e:
+                last_error = e
+                logger.debug(f"Попытка чтения с кодировкой {encoding} не удалась: {type(e).__name__}")
+                continue
+
+        if df is None:
+            raise ValueError(f"Не удалось прочитать файл ни с одной из кодировок: {encodings_to_try}. Последняя ошибка: {last_error}")
+
+        logger.debug(f"CSV файл прочитан, строк: {len(df)}, столбцов: {len(df.columns)}")
 
         # Применяем валидацию
         df_processed = process_dataframe(df)
+
+        logger.debug("Валидация завершена, сохранение результата в Excel")
 
         # Сохраняем результат в Excel
         write_with_highlight(df_processed, output_path)
@@ -459,6 +697,8 @@ async def validate_catalog(file: UploadFile = File(...)):
             if col.endswith("__correct"):
                 errors_found += df_processed[col].astype(str).str.strip().ne("").sum()
 
+        logger.info(f"Обработка завершена успешно. Найдено ошибок: {errors_found}, результат: {output_filename}")
+
         # Удаляем временный входной файл
         os.remove(input_path)
 
@@ -467,54 +707,164 @@ async def validate_catalog(file: UploadFile = File(...)):
             "filename": output_filename,
             "rows_processed": len(df_processed),
             "errors_found": int(errors_found),
-            "message": "Валідація завершена успішно"
+            "message": "Валидация завершена успешно"
         }
 
     except Exception as e:
+        # Логируем ошибку
+        logger.error(f"Ошибка при обработке файла {file.filename}: {str(e)}", exc_info=True)
+
         # Очистка временных файлов в случае ошибки
         if os.path.exists(input_path):
             os.remove(input_path)
         if os.path.exists(output_path):
             os.remove(output_path)
 
-        raise HTTPException(status_code=500, detail=f"Помилка обробки файлу: {str(e)}")
+        # Умный анализ ошибки через LLM
+        error_analysis = await analyze_error_async(e, context=f"Обработка файла {file.filename}")
+
+        # Формируем детальное сообщение об ошибке
+        if error_analysis and error_analysis.get("success"):
+            error_detail = format_error_response(error_analysis, f"Ошибка обработки файла: {str(e)}")
+            logger.info("Получен умный анализ ошибки от LLM")
+        else:
+            error_detail = f"Ошибка обработки файла: {str(e)}"
+
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.get("/api/download/{filename}")
 async def download_result(filename: str):
     """
-    API endpoint для завантаження результату перевірки.
+    API endpoint для скачивания результата проверки.
+    Защищен от Path Traversal атак.
     """
-    temp_dir = tempfile.gettempdir()
-    file_path = os.path.join(temp_dir, filename)
+    # Безопасная обработка имени файла - берем только имя без путей
+    safe_filename = Path(filename).name
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Файл не знайдено")
+    # Проверка безопасности: только файлы с префиксом checked_
+    if not safe_filename.startswith("checked_"):
+        raise HTTPException(status_code=403, detail="Доступ запрещён")
 
-    # Перевірка безпеки: тільки файли з префіксом checked_
-    if not filename.startswith("checked_"):
-        raise HTTPException(status_code=403, detail="Доступ заборонено")
+    temp_dir = Path(tempfile.gettempdir())
+    file_path = temp_dir / safe_filename
+
+    # Проверка что путь внутри temp_dir (защита от path traversal)
+    try:
+        file_path_resolved = file_path.resolve()
+        temp_dir_resolved = temp_dir.resolve()
+        if not file_path_resolved.is_relative_to(temp_dir_resolved):
+            raise HTTPException(status_code=403, detail="Недопустимый путь к файлу")
+    except (ValueError, OSError):
+        raise HTTPException(status_code=403, detail="Недопустимый путь к файлу")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден")
 
     return FileResponse(
-        path=file_path,
-        filename=filename,
+        path=str(file_path),
+        filename=safe_filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 
 @app.get("/api/health")
 async def health_check():
-    """Перевірка працездатності сервісу"""
+    """Проверка работоспособности сервиса"""
     return {
         "status": "healthy",
         "service": "Catalog Validator",
-        "version": "2.0 (UA)"
+        "version": "2.0",
+        "llm_enabled": bool(LLM_API_KEY)
     }
+
+
+@app.post("/api/analyze-category", response_model=CategoryResponse)
+async def analyze_category(req: CategoryRequest):
+    """
+    Умный анализ названия категории через LLM.
+    Определяет нужно ли множественное число и предлагает корректный вариант.
+    """
+    result = await ask_llm_category(req.name, req.path)
+    if result is None:
+        # если LLM недоступен — вернуть "как есть"
+        return CategoryResponse(
+            should_be_plural=False,
+            suggested_name=req.name,
+            reason="LLM API не настроен или недоступен",
+        )
+    logger.info(f"LLM анализ категории '{req.name}': {result.suggested_name}")
+    return result
+
+
+@app.post("/api/analyze-error")
+async def analyze_error(req: ErrorRequest):
+    """
+    Умный анализ ошибок через LLM API.
+    Принимает traceback и возвращает понятное объяснение с решением.
+    """
+    traceback_preview = req.error_traceback[:100] + "..." if len(req.error_traceback) > 100 else req.error_traceback
+    logger.info(f"Получен запрос на анализ ошибки: {traceback_preview}")
+
+    explanation = await ask_llm_error(req.error_traceback)
+
+    logger.info(f"Анализ ошибки выполнен успешно, длина ответа: {len(explanation)} символов")
+    return {"explanation": explanation}
 
 
 if __name__ == "__main__":
     import uvicorn
-    print(">>> Zapusk veb-interfeysa...")
-    print(">>> Otkroyte brauzer: http://localhost:8080")
-    print(">>> Ili: http://127.0.0.1:8080")
-    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
+    import sys
+
+    try:
+        # Проверка конфигурации
+        check_config()
+
+        logger.info("=" * 60)
+        logger.info(">>> Запуск веб-интерфейса Catalog Validator")
+        logger.info(f">>> Окружение: {ENVIRONMENT}")
+        logger.info("=" * 60)
+
+        if SERVER_HOST == "0.0.0.0":
+            logger.info(">>> Сервер доступен по сети!")
+            logger.info(">>> Менеджеры могут подключаться по адресу:")
+            logger.info(">>>   http://<IP_СЕРВЕРА>:" + str(SERVER_PORT))
+            logger.info("")
+            logger.info(">>> Локальный доступ:")
+            logger.info(f">>>   http://127.0.0.1:{SERVER_PORT}")
+        else:
+            logger.info(">>> Откройте браузер и перейдите по адресу:")
+            logger.info(f"   http://{SERVER_HOST}:{SERVER_PORT}")
+
+        logger.info("")
+        logger.info(">>> Для остановки сервера нажмите: Ctrl+C")
+        logger.info("=" * 60)
+
+        uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="info")
+
+    except KeyboardInterrupt:
+        logger.info("\n" + "=" * 60)
+        logger.info(">>> Сервер остановлен пользователем")
+        logger.info("=" * 60)
+        sys.exit(0)
+
+    except OSError as e:
+        if "Address already in use" in str(e) or "Обычно разрешается" in str(e):
+            logger.error("\n" + "=" * 60)
+            logger.error(">>> ОШИБКА: Порт 8080 уже используется!")
+            logger.error(">>> Закройте другое приложение на порту 8080")
+            logger.error(">>> или перезагрузите компьютер")
+            logger.error("=" * 60)
+            sys.exit(1)
+        else:
+            logger.error(f"\n>>> ОШИБКА СЕТИ: {e}")
+            sys.exit(1)
+
+    except Exception as e:
+        logger.error("\n" + "=" * 60)
+        logger.error(f">>> КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        logger.error(">>> Подробности в логах выше")
+        logger.error("=" * 60)
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)

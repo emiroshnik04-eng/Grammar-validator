@@ -7,6 +7,10 @@ from openpyxl.styles import PatternFill
 import pymorphy3
 import language_tool_python
 import httpx
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env
+load_dotenv()
 
 
 """
@@ -114,16 +118,26 @@ def check_spelling(text: str) -> Optional[Tuple[str, str]]:
 
 def is_plural_noun(word: str) -> bool:
     """
-    Проверка, что основная форма — существительное во множественном числе.
+    Проверка, что слово — существительное во множественном числе.
+    Проверяет все возможные разборы слова, т.к. "машинки" может быть:
+    - ед.ч., род.падеж (машинка -> машинки)
+    - мн.ч., им.падеж (машинки)
     """
     word = (word or "").strip()
     if not word:
         return False
 
-    p = _first_parse(word)
-    if not p:
+    parses = _MORPH.parse(word)
+    if not parses:
         return False
-    return "NOUN" in p.tag and "plur" in p.tag
+
+    # Проверяем все возможные разборы
+    for p in parses:
+        # Ищем форму: существительное + множественное число + именительный падеж
+        if "NOUN" in p.tag and "plur" in p.tag and "nomn" in p.tag:
+            return True
+
+    return False
 
 
 def make_plural(word: str) -> Optional[str]:
@@ -203,24 +217,30 @@ def is_proper_noun_or_compound(name: str) -> bool:
         significant_words = [w for w in words if w.lower() not in _FUNCTION_WORDS]
 
         if len(significant_words) >= 2:
+            # Проверка паттерна "Прилагательное(ые) + Существительное"
+            # Составные названия категорий типа "Игрушечные машинки", "Другой игрушечный транспорт"
+            # не нужно склонять
+            last_word = significant_words[-1]
+            last_parse = _first_parse(last_word)
+
+            # Проверяем что последнее слово - существительное
+            if last_parse and "NOUN" in last_parse.tag:
+                # Проверяем что хотя бы одно из предыдущих слов - прилагательное
+                has_adjective = False
+                for word in significant_words[:-1]:
+                    word_parse = _first_parse(word)
+                    if word_parse and ("ADJF" in word_parse.tag or "ADJS" in word_parse.tag):
+                        has_adjective = True
+                        break
+
+                if has_adjective:
+                    # Составное название категории (прилагательное(ые) + существительное)
+                    return True
+
             # Если все значимые слова с заглавной — вероятно имя собственное
             all_capitalized = all(w[0].isupper() for w in significant_words if w)
             if all_capitalized:
                 return True
-
-            # Проверка паттерна "Прилагательное + Существительное" для известных названий
-            # Например: "Детский мир", "Красная площадь", "Чёрное море"
-            if len(significant_words) == 2:
-                first_word = significant_words[0]
-                second_word = significant_words[1]
-
-                # Если оба с заглавной буквы
-                if first_word[0].isupper() and second_word[0].isupper():
-                    # Проверяем морфологию первого слова
-                    first_parse = _first_parse(first_word)
-                    if first_parse and ("ADJF" in first_parse.tag or "ADJS" in first_parse.tag):
-                        # Прилагательное + существительное с заглавными = вероятно имя собственное
-                        return True
 
     # 3. Проверка через pymorphy3 на тег Name (имя собственное)
     # Проверяем первое слово
@@ -232,11 +252,18 @@ def is_proper_noun_or_compound(name: str) -> bool:
     return False
 
 
-def ensure_category_plural(name: str) -> Optional[Tuple[str, str]]:
+def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     """
-    Категория должна быть во множественном числе, кроме:
-    - слов из списка неисчисляемых/массовых (_CATEGORY_MASS_LIKE)
-    - имён собственных и составных названий (определяется через is_proper_noun_or_compound)
+    Проверка формата названия категории по спецификации:
+    1. Первая буква заглавная (кроме аббревиатур/брендов)
+    2. Именительный падеж (nominative)
+    3. Множественное число (кроме неисчисляемых и составных названий)
+
+    Примеры:
+    - "игрушка" -> "Игрушки"
+    - "игрушек" -> "Игрушки"
+    - "USB кабели" -> "USB кабели" (не меняем)
+    - "Игрушечный транспорт" -> "Игрушечный транспорт" (составное название, не меняем)
     """
     name = (name or "").strip()
     if not name:
@@ -247,19 +274,64 @@ def ensure_category_plural(name: str) -> Optional[Tuple[str, str]]:
     if low in _CATEGORY_MASS_LIKE:
         return None
 
-    # Проверка имён собственных и брендов (новая логика)
+    # Проверка имён собственных, брендов и составных названий (не трогаем)
     if is_proper_noun_or_compound(name):
         return None
 
-    # Уже во множественном числе
-    if is_plural_noun(name):
+    # Проверяем, является ли это аббревиатурой (все буквы заглавные, > 1 буквы)
+    words = name.split()
+    is_abbreviation = len(name) > 1 and name.replace(" ", "").isupper() and name.replace(" ", "").isalpha()
+
+    if is_abbreviation:
+        return None  # Не трогаем аббревиатуры типа "USB", "DVD"
+
+    # Анализируем последнее слово (главное существительное в составных названиях)
+    main_word = words[-1] if len(words) > 1 else name
+    prefix = " ".join(words[:-1]) + " " if len(words) > 1 else ""
+
+    # Парсим главное слово
+    parsed = _first_parse(main_word)
+    if not parsed or "NOUN" not in parsed.tag:
+        return None  # Не существительное - не трогаем
+
+    # Проверяем текущее состояние
+    is_plural = "plur" in parsed.tag
+    is_nominative = "nomn" in parsed.tag
+    is_capitalized = main_word[0].isupper() if main_word else False
+
+    # Если уже в правильной форме - не трогаем
+    if is_plural and is_nominative and is_capitalized:
         return None
 
-    # Пытаемся преобразовать в множественное число
-    suggestion = make_plural(name)
-    if suggestion and suggestion != name:
-        return name, suggestion
+    # Формируем правильную форму: именительный падеж + мн.число
+    try:
+        # Приводим к им.падежу, мн.числу
+        correct_form = parsed.inflect({"nomn", "plur"})
+        if not correct_form:
+            return None
+
+        corrected = correct_form.word
+
+        # Первая буква заглавная
+        if corrected and corrected[0].islower():
+            corrected = corrected[0].upper() + corrected[1:]
+
+        # Собираем полное название с префиксом
+        full_corrected = prefix + corrected
+
+        if full_corrected != name:
+            return name, full_corrected
+
+    except Exception:
+        return None
+
     return None
+
+
+# Оставляем старую функцию для обратной совместимости, но она теперь вызывает новую
+def ensure_category_plural(name: str) -> Optional[Tuple[str, str]]:
+    """Устаревшая функция - используйте ensure_category_format"""
+    return ensure_category_format(name)
 
 
 def detect_pos(word: str) -> Optional[str]:
@@ -332,6 +404,7 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     else:
         other_word = "Другой"
 
+    # Название параметра оставляем без изменений
     correct = f"{other_word} {param_name}"
     if value != correct:
         return value, correct
@@ -401,10 +474,13 @@ def ensure_singular_for_item(value: str) -> Optional[Tuple[str, str]]:
     if not p:
         return None
 
-    if "plur" not in p.tag:
+    # Проверяем, что слово действительно в именительном падеже множественного числа
+    # (не путаем с другими падежами единственного числа)
+    if "plur" not in p.tag or "nomn" not in p.tag:
         return None
 
-    form = p.inflect({"sing"}) if "NOUN" in p.tag or "ADJF" in p.tag or "ADJS" in p.tag else None
+    # Пробуем получить форму единственного числа
+    form = p.inflect({"sing", "nomn"}) if "NOUN" in p.tag or "ADJF" in p.tag or "ADJS" in p.tag else None
     if not form:
         return None
 
@@ -412,8 +488,15 @@ def ensure_singular_for_item(value: str) -> Optional[Tuple[str, str]]:
     if value[0].isupper():
         corrected = corrected.capitalize()
 
-    if corrected != value:
-        return value, corrected
+    # Проверяем, что форма действительно изменилась и это не ложное срабатывание
+    if corrected != value and corrected.lower() != value.lower():
+        # Дополнительная проверка: слово должно действительно иметь множественное число
+        # Пробуем проверить обратное преобразование
+        check_plural = _MORPH.parse(corrected)[0].inflect({"plur", "nomn"}) if _MORPH.parse(corrected) else None
+        if check_plural and check_plural.word.lower() == value.lower():
+            # Подтверждено: это действительно множественное число
+            return value, corrected
+
     return None
 
 
@@ -514,13 +597,95 @@ def build_param_case_profile(df: pd.DataFrame) -> Dict[str, str]:
     return result
 
 
+def has_preposition(text: str) -> bool:
+    """
+    Проверяет, содержит ли текст предлоги (в, на, из, к, с, у, о, по, до, для и т.д.).
+    Такие фразы не должны проверяться на число.
+    """
+    prepositions = {'в', 'на', 'из', 'к', 'с', 'у', 'о', 'об', 'от', 'до', 'по', 'для', 'без', 'под', 'над', 'при', 'про', 'через', 'за', 'перед', 'между'}
+    words = text.lower().split()
+    return len(words) > 1 and any(word in prepositions for word in words)
+
+
+def build_param_number_profile(df: pd.DataFrame) -> Dict[str, str]:
+    """
+    Для каждого param_id определяет преобладающий паттерн числа его значений (singular / plural).
+    Это нужно, чтобы проверять единообразие числа внутри группы значений параметра.
+    """
+    cfg = CONFIG
+    pid_col = cfg["param_id_column"]
+    val_col = cfg["param_value_column"]
+    threshold = cfg.get("case_consistency_threshold", 0.6)
+
+    if pid_col not in df.columns or val_col not in df.columns:
+        return {}
+
+    stats: Dict[str, Dict[str, int]] = {}
+
+    for _, row in df.iterrows():
+        pid = row.get(pid_col)
+        val = row.get(val_col)
+        if pid is None or pd.isna(pid) or val is None or pd.isna(val):
+            continue
+        pid = str(pid)
+        word = str(val).strip()
+        if not word:
+            continue
+
+        # Пропускаем фразы с предлогами (например "Доставка в район")
+        if has_preposition(word):
+            continue
+
+        # Пропускаем слова с латиницей/цифрами (вероятно бренды)
+        if any(ch.isascii() and ch.isalpha() for ch in word) or any(ch.isdigit() for ch in word):
+            continue
+
+        parsed = _first_parse(word)
+        if not parsed:
+            continue
+
+        # Определяем число
+        if "plur" in parsed.tag and "nomn" in parsed.tag:
+            number_type = "plural"
+        elif "sing" in parsed.tag or "nomn" in parsed.tag:
+            number_type = "singular"
+        else:
+            continue
+
+        if pid not in stats:
+            stats[pid] = {"singular": 0, "plural": 0}
+        stats[pid][number_type] += 1
+
+    result: Dict[str, str] = {}
+    for pid, counts in stats.items():
+        total = counts["singular"] + counts["plural"]
+        if total == 0:
+            continue
+
+        singular_ratio = counts["singular"] / total
+        plural_ratio = counts["plural"] / total
+
+        # Определяем преобладающий паттерн только если есть явное большинство
+        if singular_ratio >= threshold:
+            result[pid] = "singular"
+        elif plural_ratio >= threshold:
+            result[pid] = "plural"
+        # Если нет явного большинства — не добавляем в профиль
+
+    return result
+
+
 SEMANTIC_URL = os.environ.get("SEMANTIC_URL", "")
+
+# Кэш для LLM результатов (чтобы не проверять одинаковые категории дважды)
+_LLM_CACHE: Dict[str, Optional[Tuple[str, str]]] = {}
 
 
 def semantic_category_suggestion(name: str, path: str) -> Optional[Tuple[str, str]]:
     """
     Запрашивает у LLM-сервиса рекомендацию по названию категории.
     Возвращает (как_было, как_нужно) или None.
+    С кэшированием - не проверяет одинаковые категории дважды.
     """
     if not SEMANTIC_URL:
         return None
@@ -530,19 +695,33 @@ def semantic_category_suggestion(name: str, path: str) -> Optional[Tuple[str, st
     if not name:
         return None
 
+    # Проверяем кэш
+    cache_key = name.lower()
+    if cache_key in _LLM_CACHE:
+        return _LLM_CACHE[cache_key]
+
     try:
         resp = httpx.post(
             SEMANTIC_URL,
             json={"name": name, "path": path},
-            timeout=5.0,
+            timeout=10.0,
         )
         resp.raise_for_status()
         data = resp.json()
         suggested = str(data.get("suggested_name", "")).strip()
+
+        result = None
         if suggested and suggested != name:
-            return name, suggested
+            result = (name, suggested)
+
+        # Сохраняем в кэш
+        _LLM_CACHE[cache_key] = result
+        return result
+
     except Exception as exc:
         # Если сервис недоступен — не ломаем основной пайплайн.
+        # Сохраняем в кэш как None чтобы не пытаться снова
+        _LLM_CACHE[cache_key] = None
         print(f"[semantic] не удалось получить рекомендацию: {exc}")
     return None
 
@@ -554,6 +733,18 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     param_col = cfg["param_name_column"]
     value_col = cfg["param_value_column"]
     pid_col = cfg["param_id_column"]
+
+    # Подсчитываем уникальные категории для LLM анализа
+    if SEMANTIC_URL:
+        unique_categories = set()
+        for col in cat_cols:
+            if col in df.columns:
+                unique_vals = df[col].dropna().unique()
+                unique_categories.update([str(v).strip().lower() for v in unique_vals if v])
+
+        # Вычитаем уже закэшированные
+        uncached = [c for c in unique_categories if c not in _LLM_CACHE]
+        print(f"[LLM] Уникальных категорий: {len(unique_categories)}, уже в кэше: {len(_LLM_CACHE)}, нужно проверить: {len(uncached)}")
 
     text_cols: List[str] = []
     text_cols.extend(cat_cols)
@@ -568,11 +759,21 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df[f"{col}__comment"] = ""
 
     # профиль части речи по параметрам
+    print("[DEBUG] Строим профиль части речи...")
     param_pos_profile = build_param_pos_profile(df)
+    print(f"[DEBUG] Профиль части речи построен: {len(param_pos_profile)} параметров")
 
     # профиль регистра по параметрам
+    print("[DEBUG] Строим профиль регистра...")
     param_case_profile = build_param_case_profile(df)
+    print(f"[DEBUG] Профиль регистра построен: {len(param_case_profile)} параметров")
 
+    # профиль числа (singular/plural) по параметрам
+    print("[DEBUG] Строим профиль числа...")
+    param_number_profile = build_param_number_profile(df)
+    print(f"[DEBUG] Профиль числа построен: {len(param_number_profile)} параметров")
+
+    print(f"[DEBUG] Начинаем обработку {len(df)} строк...")
     for idx, row in df.iterrows():
         # категории — множ. число + орфография
         for col in cat_cols:
@@ -586,10 +787,10 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             corrections: List[str] = []
             comments: List[str] = []
 
-            plural_issue = ensure_category_plural(text)
-            if plural_issue:
-                corrections.append(plural_issue[1])
-                comments.append("Название категории должно быть во множественном числе")
+            format_issue = ensure_category_format(text)
+            if format_issue:
+                corrections.append(format_issue[1])
+                comments.append("Формат категории: с заглавной буквы, именительный падеж, множественное число")
 
             spell_issue = check_spelling(text)
             if spell_issue:
@@ -597,17 +798,18 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                     corrections.append(spell_issue[1])
                 comments.append("Орфография/грамматика")
 
-            # Семантическая рекомендация от LLM-сервиса
-            full_path = " > ".join(
-                str(row.get(c)).strip()
-                for c in cat_cols
-                if c in df.columns and not pd.isna(row.get(c))
-            )
-            sem_issue = semantic_category_suggestion(text, full_path)
-            if sem_issue:
-                # если уже есть локальное исправление — LLM может его переопределить
-                corrections = [sem_issue[1]]
-                comments.append("Рекомендация LLM-сервиса по названию категории")
+            # Семантическая рекомендация от LLM-сервиса (с кэшированием)
+            # Каждая уникальная категория проверяется только 1 раз
+            if SEMANTIC_URL and not corrections:  # Используем LLM только если нет локальных ошибок
+                full_path = " > ".join(
+                    str(row.get(c)).strip()
+                    for c in cat_cols
+                    if c in df.columns and not pd.isna(row.get(c))
+                )
+                sem_issue = semantic_category_suggestion(text, full_path)
+                if sem_issue:
+                    corrections = [sem_issue[1]]
+                    comments.append("Рекомендация LLM")
 
             if corrections:
                 df.at[idx, f"{col}__correct"] = corrections[0]
@@ -646,7 +848,7 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 corrections.append(other_issue[1])
                 comments.append('Шаблон "Другой/Другое/Другая/Другие + название параметра"')
 
-            # проверка единообразия регистра в рамках param_id
+            # проверка единообразия регистра ПЕРВОЙ БУКВЫ в рамках param_id
             if pid and pid in param_case_profile:
                 expected_case = param_case_profile[pid]
                 case_issue = check_case_consistency(param_value, expected_case)
@@ -655,15 +857,8 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                         corrections.append(case_issue[1])
                     case_label = "строчная буква" if expected_case == "lowercase" else "заглавная буква"
                     comments.append(
-                        f"Регистр значения не соответствует большинству значений этого параметра (ожидается {case_label})"
+                        f"Регистр первой буквы не соответствует большинству значений этого параметра (ожидается {case_label})"
                     )
-
-            # единственное число для "штучных" значений (эвристика)
-            sing_issue = ensure_singular_for_item(param_value)
-            if sing_issue:
-                if not corrections:
-                    corrections.append(sing_issue[1])
-                comments.append("Значение параметра должно быть в единственном числе")
 
             # орфография/грамматика значения
             spell_issue_val = check_spelling(param_value)
@@ -680,6 +875,24 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                     comments.append(
                         f"Часть речи значения отличается от большинства по этому параметру (ожидается {target_pos})"
                     )
+
+            # однородность числа (singular/plural) внутри параметра
+            if pid and pid in param_number_profile and not has_preposition(param_value):
+                target_number = param_number_profile[pid]
+                parsed = _first_parse(param_value)
+                if parsed:
+                    if "plur" in parsed.tag and "nomn" in parsed.tag:
+                        actual_number = "plural"
+                    elif "sing" in parsed.tag or "nomn" in parsed.tag:
+                        actual_number = "singular"
+                    else:
+                        actual_number = None
+
+                    if actual_number and actual_number != target_number:
+                        number_label = "единственном числе" if target_number == "singular" else "множественном числе"
+                        comments.append(
+                            f"Число значения отличается от большинства значений этого параметра (ожидается в {number_label})"
+                        )
 
             if corrections:
                 df.at[idx, f"{value_col}__correct"] = corrections[0]

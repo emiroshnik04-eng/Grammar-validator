@@ -8,7 +8,24 @@
       "Bash(pip install:*)",
       "Bash(git branch:*)",
       "Bash(git remote add:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(ssh-keygen:*)",
+      "Bash(cat:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(ssh:*)",
+      "Bash(timeout 15 git push --set-upstream origin main)",
+      "Bash(tar:*)",
+      "Bash(ssh-add:*)",
+      "Bash(timeout 3 bash -c \"sleep 3 && curl -s http://127.0.0.1:8080/api/health\")",
+      "Bash(curl -s http://127.0.0.1:8080/api/health)",
+      "Bash(rm:*)",
+      "Bash(git submodule update:*)",
+      "Bash(make:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(d:)",
+      "Bash(create_desktop_shortcut.bat)"
     ]
   }
 }

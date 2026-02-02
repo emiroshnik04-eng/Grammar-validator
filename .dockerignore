@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+
+# Временные файлы
+*.csv
+*.xlsx
+checked_*
+temp_*
+*.log
+
+# Документация и примеры
+*.md
+docs/
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Локальные настройки
+.env
+.env.local
+*.local.json
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Другое
+.DS_Store
+Thumbs.db
+nul
