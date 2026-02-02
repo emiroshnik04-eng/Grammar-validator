@@ -383,25 +383,100 @@ def is_proper_noun_word(word: str) -> bool:
 def normalize_compound_capitalization(text: str) -> str:
     """
     Capitalize first word, lowercase rest unless proper noun/abbreviation.
+    Also handles hyphens and conjunction "и".
 
     Examples:
         "Другой Красный Цвет" → "Другой красный цвет"
+        "Игрушки-Роботы" → "Игрушки-роботы"
+        "Роботы и Трансформеры" → "Роботы и трансформеры"
         "Другой iPhone" → "Другой iPhone"
         "Другая USB мышь" → "Другая USB мышь"
     """
-    words = text.split()
-    if len(words) <= 1:
+    if not text or not text.strip():
         return text
 
-    result = [words[0].capitalize()]  # First word always capitalized
+    # Split by spaces first
+    words = text.split()
+    if len(words) <= 1:
+        # Check if single word contains hyphen
+        if '-' in text:
+            parts = text.split('-')
+            result_parts = [parts[0].capitalize()]
+            for part in parts[1:]:
+                if is_proper_noun_word(part):
+                    result_parts.append(part)
+                else:
+                    result_parts.append(part.lower())
+            return '-'.join(result_parts)
+        return text
 
-    for word in words[1:]:
-        if is_proper_noun_word(word):
-            result.append(word)  # Keep proper nouns as-is
+    result = []
+
+    for i, word in enumerate(words):
+        # Handle hyphenated words
+        if '-' in word:
+            parts = word.split('-')
+            if i == 0:
+                # First word: capitalize first part, lowercase rest
+                processed_parts = [parts[0].capitalize()]
+                for part in parts[1:]:
+                    if is_proper_noun_word(part):
+                        processed_parts.append(part)
+                    else:
+                        processed_parts.append(part.lower())
+            else:
+                # Not first word: lowercase all parts unless proper noun
+                processed_parts = []
+                for part in parts:
+                    if is_proper_noun_word(part):
+                        processed_parts.append(part)
+                    else:
+                        processed_parts.append(part.lower())
+            result.append('-'.join(processed_parts))
         else:
-            result.append(word.lower())  # Lowercase everything else
+            # Regular word without hyphen
+            if i == 0:
+                result.append(word.capitalize())  # First word always capitalized
+            elif word.lower() == 'и':
+                result.append('и')  # Conjunction stays lowercase
+            elif is_proper_noun_word(word):
+                result.append(word)  # Keep proper nouns as-is
+            else:
+                result.append(word.lower())  # Lowercase everything else
 
     return " ".join(result)
+
+
+def singularize_noun(word: str) -> str:
+    """
+    Convert noun to singular form (nominative case).
+
+    Examples:
+        "особенности" → "особенность"
+        "цвета" → "цвет"
+        "формы" → "форма"
+    """
+    if not word or not word.strip():
+        return word
+
+    p = _first_parse(word.strip())
+    if not p:
+        return word
+
+    # If already singular, return as-is
+    if "sing" in p.tag:
+        return word
+
+    # If plural, try to inflect to singular nominative
+    if "plur" in p.tag:
+        try:
+            singular_form = p.inflect({"sing", "nomn"})
+            if singular_form:
+                return singular_form.word
+        except Exception:
+            pass
+
+    return word
 
 
 def extract_head_noun(phrase: str) -> str:
@@ -433,6 +508,7 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     Паттерн «другой/другое/другая/другие ... + <название параметра>»:
     - базовый шаблон: прилагательное "другой" + param_name;
     - форму "другой" подбираем по падежу/роду/числу param_name (грубо по слову в именительном).
+    - param_name приводится к единственному числу.
     """
     value = (value or "").strip()
     param_name = (param_name or "").strip()
@@ -443,9 +519,13 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     if not low.startswith("друг"):
         return None
 
+    # Приводим параметр к единственному числу
+    # "особенности" → "особенность"
+    param_name_singular = " ".join(singularize_noun(word) for word in param_name.split())
+
     # Морфологический разбор названия параметра
     # Берём главное (головное) существительное из фразы
-    head = extract_head_noun(param_name)
+    head = extract_head_noun(param_name_singular)
     p = _first_parse(head)
     if not p:
         correct = f"Другой {param_name}"
@@ -479,8 +559,8 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     else:
         other_word = "Другой"
 
-    # Применяем правильную капитализацию к составной фразе
-    correct = normalize_compound_capitalization(f"{other_word} {param_name}")
+    # Применяем правильную капитализацию к составной фразе (используем единственное число)
+    correct = normalize_compound_capitalization(f"{other_word} {param_name_singular}")
     if value != correct:
         return value, correct
     return None
@@ -995,13 +1075,16 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def write_with_highlight(df_processed: pd.DataFrame, output_path: str) -> None:
     """
     Пишем в Excel и подсвечиваем оригинальные ячейки, у которых есть исправление.
+    Ошибки - светло-красным, исправления - светло-зелёным.
     """
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df_processed.to_excel(writer, sheet_name="Checked", index=False)
         wb = writer.book
         ws = wb["Checked"]
 
-        fill = PatternFill(start_color="FFF8CBAD", end_color="FFF8CBAD", fill_type="solid")
+        # Светло-красный для ошибок, светло-зелёный для исправлений
+        error_fill = PatternFill(start_color="FFFFCDD2", end_color="FFFFCDD2", fill_type="solid")
+        correction_fill = PatternFill(start_color="FFC8E6C9", end_color="FFC8E6C9", fill_type="solid")
 
         header = [cell.value for cell in ws[1]]
         col_index = {name: idx + 1 for idx, name in enumerate(header)}
@@ -1020,8 +1103,12 @@ def write_with_highlight(df_processed: pd.DataFrame, output_path: str) -> None:
 
                 correct_cell = ws.cell(row=row_idx, column=col_index[correct_col])
                 if correct_cell.value not in (None, "", " "):
+                    # Подсвечиваем оригинальную ячейку с ошибкой красным
                     base_cell = ws.cell(row=row_idx, column=col_index[name])
-                    base_cell.fill = fill
+                    base_cell.fill = error_fill
+
+                    # Подсвечиваем ячейку с исправлением зелёным
+                    correct_cell.fill = correction_fill
 
 
 def main() -> None:
