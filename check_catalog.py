@@ -264,12 +264,14 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     1. Первая буква заглавная (кроме аббревиатур/брендов)
     2. Именительный падеж (nominative)
     3. Множественное число (кроме неисчисляемых и составных названий)
+    4. Второе слово с маленькой буквы (кроме имён собственных/аббревиатур)
 
     Примеры:
     - "игрушка" -> "Игрушки"
     - "игрушек" -> "Игрушки"
     - "USB кабели" -> "USB кабели" (не меняем)
     - "Игрушечный транспорт" -> "Игрушечный транспорт" (составное название, не меняем)
+    - "Развивающие Игрушки" -> "Развивающие игрушки"
     """
     name = (name or "").strip()
     if not name:
@@ -303,11 +305,6 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     # Проверяем текущее состояние
     is_plural = "plur" in parsed.tag
     is_nominative = "nomn" in parsed.tag
-    is_capitalized = main_word[0].isupper() if main_word else False
-
-    # Если уже в правильной форме - не трогаем
-    if is_plural and is_nominative and is_capitalized:
-        return None
 
     # Формируем правильную форму: именительный падеж + мн.число
     try:
@@ -318,12 +315,11 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
 
         corrected = correct_form.word
 
-        # Первая буква заглавная
-        if corrected and corrected[0].islower():
-            corrected = corrected[0].upper() + corrected[1:]
-
         # Собираем полное название с префиксом
         full_corrected = prefix + corrected
+
+        # Применяем правильную капитализацию (первое слово заглавное, остальные маленькие кроме исключений)
+        full_corrected = normalize_compound_capitalization(full_corrected)
 
         if full_corrected != name:
             return name, full_corrected
@@ -482,19 +478,26 @@ def singularize_noun(word: str) -> str:
 def extract_head_noun(phrase: str) -> str:
     """
     Extract grammatical head (main noun) from a phrase.
-    In Russian, the head noun is typically the LAST noun in the phrase.
+    In Russian, the head noun is typically the FIRST noun in NOMINATIVE case.
 
     Examples:
-        "Цвет корпуса" → "корпуса" (genitive of "корпус")
-        "Материал изготовления" → "изготовления"
-        "Бренд" → "Бренд"
+        "тип плюшевой игрушки" → "тип" (nominative, masculine)
+        "марка автомобиля" → "марка" (nominative, feminine)
+        "цвет корпуса" → "цвет" (nominative, masculine)
+        "бренд" → "бренд" (nominative)
     """
     words = phrase.split()
     if not words:
         return phrase
 
-    # In Russian, head noun is typically LAST noun in phrase
-    for word in reversed(words):
+    # First, try to find the first noun in nominative case
+    for word in words:
+        p = _first_parse(word)
+        if p and "NOUN" in p.tag and "nomn" in p.tag:
+            return word
+
+    # If no nominative noun, take first noun (any case)
+    for word in words:
         p = _first_parse(word)
         if p and "NOUN" in p.tag:
             return word

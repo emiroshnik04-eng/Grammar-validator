@@ -57,7 +57,7 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4-turbo")
 
 
 # Инициализация FastAPI
-app = FastAPI(title="Catalog Validator", description="Инструмент проверки качества каталога товаров")
+app = FastAPI(title="Grammar Validator", description="Инструмент проверки качества каталога товаров")
 
 # Инициализация Rate Limiter
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/hour"])
@@ -214,7 +214,7 @@ HTML_TEMPLATE = r"""
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Catalog Validator</title>
+    <title>Grammar Validator</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -495,8 +495,8 @@ HTML_TEMPLATE = r"""
 </head>
 <body>
     <div class="container">
-        <h1>🔍 Catalog Validator</h1>
-        <p class="subtitle">Upload CSV file for automated data quality validation</p>
+        <h1>🔍 Grammar Validator</h1>
+        <p class="subtitle">Upload Excel file for automated grammar and data quality validation</p>
 
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
@@ -935,7 +935,7 @@ async def health_check():
     """Проверка работоспособности сервиса"""
     return {
         "status": "healthy",
-        "service": "Catalog Validator",
+        "service": "Grammar Validator",
         "version": "2.0",
         "llm_enabled": bool(LLM_API_KEY)
     }
@@ -983,7 +983,7 @@ if __name__ == "__main__":
         check_config()
 
         logger.info("=" * 60)
-        logger.info(">>> Запуск веб-интерфейса Catalog Validator")
+        logger.info(">>> Запуск веб-интерфейса Grammar Validator")
         logger.info(f">>> Окружение: {ENVIRONMENT}")
         logger.info("=" * 60)
 
