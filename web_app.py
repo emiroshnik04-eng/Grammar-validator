@@ -501,10 +501,10 @@ HTML_TEMPLATE = r"""
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
             <p><strong>Click to select file</strong> or drag and drop it here</p>
-            <p style="color: #999; font-size: 14px; margin-top: 10px;">CSV file with ";" delimiter</p>
+            <p style="color: #999; font-size: 14px; margin-top: 10px;">Excel file (.xlsx, .xls)</p>
         </div>
 
-        <input type="file" id="fileInput" accept=".csv">
+        <input type="file" id="fileInput" accept=".xlsx,.xls">
 
         <div class="file-info" id="fileInfo">
             <div class="file-name" id="fileName"></div>
@@ -585,8 +585,11 @@ HTML_TEMPLATE = r"""
         });
 
         function handleFile(file) {
-            if (!file.name.endsWith('.csv')) {
-                showStatus('error', 'Please select a CSV file');
+            const validExtensions = ['.xlsx', '.xls'];
+            const hasValidExtension = validExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+
+            if (!hasValidExtension) {
+                showStatus('error', 'Please select an Excel file (.xlsx or .xls)');
                 return;
             }
 
@@ -778,9 +781,10 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
     progress_tracker[task_id] = {"progress": 0, "status": "starting", "message": "Initializing..."}
 
     # Проверка типа файла
-    if not file.filename.endswith('.csv'):
+    valid_extensions = ('.xlsx', '.xls')
+    if not file.filename.lower().endswith(valid_extensions):
         progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "Invalid file type"}
-        raise HTTPException(status_code=400, detail="Пожалуйста, загрузите CSV файл")
+        raise HTTPException(status_code=400, detail="Пожалуйста, загрузите Excel файл (.xlsx или .xls)")
 
     # Максимальный размер файла: 100 МБ
     MAX_FILE_SIZE = 100 * 1024 * 1024
@@ -788,7 +792,9 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
     # Создаём временные файлы
     temp_dir = tempfile.gettempdir()
     input_path = os.path.join(temp_dir, f"input_{file.filename}")
-    output_filename = f"checked_{file.filename.replace('.csv', '.xlsx')}"
+    # Заменяем расширение на .xlsx для выходного файла
+    base_name = file.filename.rsplit('.', 1)[0]
+    output_filename = f"checked_{base_name}.xlsx"
     output_path = os.path.join(temp_dir, output_filename)
 
     try:
@@ -814,32 +820,20 @@ async def validate_catalog(request: Request, file: UploadFile = File(...)):
 
         logger.info(f"Начало обработки файла: {file.filename}")
 
-        # Читаем CSV с автоматическим определением кодировки
-        progress_tracker[task_id] = {"progress": 30, "status": "processing", "message": "Parsing CSV..."}
-        encodings_to_try = ["utf-8", "utf-8-sig", "cp1251", "windows-1251", "latin-1", "iso-8859-1"]
-        df = None
-        last_error = None
+        # Читаем Excel файл
+        progress_tracker[task_id] = {"progress": 30, "status": "processing", "message": "Parsing Excel..."}
+        try:
+            df = pd.read_excel(
+                input_path,
+                dtype=str,
+                engine='openpyxl' if file.filename.lower().endswith('.xlsx') else None
+            )
+            logger.info(f"Excel файл успешно прочитан")
+        except Exception as e:
+            progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "Failed to parse Excel"}
+            raise ValueError(f"Не удалось прочитать Excel файл: {str(e)}")
 
-        for encoding in encodings_to_try:
-            try:
-                df = pd.read_csv(
-                    input_path,
-                    sep=CONFIG["sep"],
-                    encoding=encoding,
-                    dtype=str
-                )
-                logger.info(f"CSV файл успешно прочитан с кодировкой: {encoding}")
-                break
-            except Exception as e:
-                last_error = e
-                logger.debug(f"Попытка чтения с кодировкой {encoding} не удалась: {type(e).__name__}")
-                continue
-
-        if df is None:
-            progress_tracker[task_id] = {"progress": 0, "status": "error", "message": "Failed to parse CSV"}
-            raise ValueError(f"Не удалось прочитать файл ни с одной из кодировок: {encodings_to_try}. Последняя ошибка: {last_error}")
-
-        logger.debug(f"CSV файл прочитан, строк: {len(df)}, столбцов: {len(df.columns)}")
+        logger.debug(f"Excel файл прочитан, строк: {len(df)}, столбцов: {len(df.columns)}")
 
         # Применяем валидацию
         progress_tracker[task_id] = {"progress": 50, "status": "processing", "message": "Validating data..."}
