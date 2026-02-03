@@ -250,21 +250,36 @@ HTML_TEMPLATE = r"""
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px;
+            padding: 16px;
         }
 
         .container {
             background: var(--paper);
             border-radius: 16px;
             box-shadow: var(--shadow-6);
-            padding: 20px;
-            max-width: 600px;
+            padding: 20px 24px;
+            max-width: 1200px;
             width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 24px;
+            max-height: 90vh;
+        }
+
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .sidebar {
+            border-left: 1px solid var(--divider);
+            padding-left: 24px;
         }
 
         h1 {
             color: var(--text-primary);
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             font-size: 1.125rem;
             font-weight: 500;
             line-height: 1.6;
@@ -273,22 +288,25 @@ HTML_TEMPLATE = r"""
 
         .subtitle {
             color: var(--text-secondary);
-            margin-bottom: 20px;
+            margin-bottom: 0;
             font-size: 0.875rem;
             font-weight: 400;
             line-height: 1.71;
             letter-spacing: 0.15px;
         }
 
+        .header {
+            margin-bottom: 16px;
+        }
+
         .upload-area {
             border: 2px dashed var(--primary);
             border-radius: 16px;
-            padding: 40px 20px;
+            padding: 24px 20px;
             text-align: center;
             background: rgba(34, 202, 70, 0.08);
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             cursor: pointer;
-            margin-bottom: 20px;
         }
 
         .upload-area:hover {
@@ -304,8 +322,8 @@ HTML_TEMPLATE = r"""
         }
 
         .upload-icon {
-            font-size: 48px;
-            margin-bottom: 10px;
+            font-size: 36px;
+            margin-bottom: 8px;
         }
 
         input[type="file"] {
@@ -314,9 +332,8 @@ HTML_TEMPLATE = r"""
 
         .file-info {
             background: rgba(86, 202, 0, 0.12);
-            padding: 16px;
+            padding: 12px 16px;
             border-radius: 16px;
-            margin-bottom: 20px;
             display: none;
         }
 
@@ -349,7 +366,6 @@ HTML_TEMPLATE = r"""
             letter-spacing: 0.3px;
             cursor: pointer;
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            margin-bottom: 10px;
             font-family: 'Inter', sans-serif;
         }
 
@@ -397,7 +413,6 @@ HTML_TEMPLATE = r"""
             background: rgba(58, 53, 65, 0.08);
             border-radius: 50px;
             overflow: hidden;
-            margin-bottom: 20px;
             display: none;
         }
 
@@ -418,7 +433,7 @@ HTML_TEMPLATE = r"""
             color: var(--text-secondary);
             font-size: 0.875rem;
             font-weight: 500;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
             display: none;
         }
 
@@ -430,7 +445,6 @@ HTML_TEMPLATE = r"""
             text-align: center;
             padding: 12px 16px;
             border-radius: 16px;
-            margin-bottom: 20px;
             display: none;
             font-weight: 400;
             font-size: 0.875rem;
@@ -458,14 +472,13 @@ HTML_TEMPLATE = r"""
         }
 
         .features {
-            margin-top: 24px;
-            padding-top: 24px;
-            border-top: 1px solid var(--divider);
+            overflow-y: auto;
+            max-height: 100%;
         }
 
         .features h3 {
             color: var(--text-primary);
-            font-size: 1rem;
+            font-size: 0.9375rem;
             font-weight: 500;
             margin-bottom: 12px;
             line-height: 1.6;
@@ -477,11 +490,11 @@ HTML_TEMPLATE = r"""
         }
 
         .features li {
-            padding: 6px 0;
+            padding: 5px 0;
             color: var(--text-secondary);
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             font-weight: 400;
-            line-height: 1.71;
+            line-height: 1.6;
             letter-spacing: 0.15px;
         }
 
@@ -491,51 +504,81 @@ HTML_TEMPLATE = r"""
             font-weight: 600;
             margin-right: 8px;
         }
+
+        .buttons-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        @media (max-width: 900px) {
+            .container {
+                grid-template-columns: 1fr;
+                max-height: none;
+            }
+
+            .sidebar {
+                border-left: none;
+                border-top: 1px solid var(--divider);
+                padding-left: 0;
+                padding-top: 20px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔍 Grammar Validator</h1>
-        <p class="subtitle">Upload Excel file for automated grammar and data quality validation</p>
+        <div class="main-content">
+            <div class="header">
+                <h1>🔍 Grammar Validator</h1>
+                <p class="subtitle">Upload Excel file for automated grammar and data quality validation</p>
+            </div>
 
-        <div class="upload-area" id="uploadArea">
-            <div class="upload-icon">📁</div>
-            <p><strong>Click to select file</strong> or drag and drop it here</p>
-            <p style="color: #999; font-size: 14px; margin-top: 10px;">Excel file (.xlsx, .xls)</p>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📁</div>
+                <p><strong>Click to select file</strong> or drag and drop it here</p>
+                <p style="color: #999; font-size: 13px; margin-top: 8px;">Excel file (.xlsx, .xls)</p>
+            </div>
+
+            <input type="file" id="fileInput" accept=".xlsx,.xls">
+
+            <div class="file-info" id="fileInfo">
+                <div class="file-name" id="fileName"></div>
+                <div class="file-size" id="fileSize"></div>
+            </div>
+
+            <div class="progress-text" id="progressText">0%</div>
+            <div class="progress-bar" id="progressBar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <div class="status" id="status"></div>
+
+            <div class="buttons-group">
+                <button class="btn btn-primary" id="processBtn" disabled>
+                    Start Validation
+                </button>
+
+                <button class="btn btn-success" id="downloadBtn">
+                    📥 Download Results
+                </button>
+            </div>
         </div>
 
-        <input type="file" id="fileInput" accept=".xlsx,.xls">
-
-        <div class="file-info" id="fileInfo">
-            <div class="file-name" id="fileName"></div>
-            <div class="file-size" id="fileSize"></div>
-        </div>
-
-        <div class="progress-text" id="progressText">0%</div>
-        <div class="progress-bar" id="progressBar">
-            <div class="progress-fill" id="progressFill"></div>
-        </div>
-
-        <div class="status" id="status"></div>
-
-        <button class="btn btn-primary" id="processBtn" disabled>
-            Start Validation
-        </button>
-
-        <button class="btn btn-success" id="downloadBtn">
-            📥 Download Results
-        </button>
-
-        <div class="features">
-            <h3>What's validated:</h3>
-            <ul>
-                <li>Spelling and grammar (LanguageTool)</li>
-                <li>Category plural forms</li>
-                <li>Smart proper noun detection ("Детский мир")</li>
-                <li>Consistent parameter capitalization</li>
-                <li>Russian language morphology rules</li>
-                <li>"Другой/Другое/Другая + parameter" pattern</li>
-            </ul>
+        <div class="sidebar">
+            <div class="features">
+                <h3>What's validated:</h3>
+                <ul>
+                    <li>Spelling and grammar (LanguageTool)</li>
+                    <li>Category plural forms</li>
+                    <li>Smart proper noun detection ("Детский мир")</li>
+                    <li>Consistent parameter capitalization</li>
+                    <li>Russian language morphology rules</li>
+                    <li>"Другой/Другое/Другая + parameter" pattern</li>
+                    <li>Genitive case in compound parameters</li>
+                    <li>First letter capitalization in categories</li>
+                </ul>
+            </div>
         </div>
     </div>
 
