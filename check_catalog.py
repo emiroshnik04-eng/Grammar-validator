@@ -201,8 +201,9 @@ def is_proper_noun_or_compound(name: str) -> bool:
     Эвристики:
     1. Проверка в списке известных имён собственных
     2. Содержит латиницу или цифры (бренд)
-    3. Все значимые слова начинаются с заглавной буквы (имя собственное)
-    4. Паттерн "Прилагательное + Существительное" с заглавными буквами
+    3. Все значимые слова начинаются с заглавной буквы И это подтверждённое имя собственное
+
+    ВАЖНО: НЕ блокируем исправление простых lowercase категорий типа "игрушки" → "Игрушки"
     """
     name = (name or "").strip()
     if not name:
@@ -223,32 +224,13 @@ def is_proper_noun_or_compound(name: str) -> bool:
         significant_words = [w for w in words if w.lower() not in _FUNCTION_WORDS]
 
         if len(significant_words) >= 2:
-            # Проверка паттерна "Прилагательное(ые) + Существительное"
-            # Составные названия категорий типа "Игрушечные машинки", "Другой игрушечный транспорт"
-            # не нужно склонять
-            last_word = significant_words[-1]
-            last_parse = _first_parse(last_word)
-
-            # Проверяем что последнее слово - существительное
-            if last_parse and "NOUN" in last_parse.tag:
-                # Проверяем что хотя бы одно из предыдущих слов - прилагательное
-                has_adjective = False
-                for word in significant_words[:-1]:
-                    word_parse = _first_parse(word)
-                    if word_parse and ("ADJF" in word_parse.tag or "ADJS" in word_parse.tag):
-                        has_adjective = True
-                        break
-
-                if has_adjective:
-                    # Составное название категории (прилагательное(ые) + существительное)
-                    return True
-
             # Если все значимые слова с заглавной — вероятно имя собственное
+            # Пример: "Детский Мир", "Красная Площадь"
             all_capitalized = all(w[0].isupper() for w in significant_words if w)
             if all_capitalized:
                 return True
 
-    # 3. Проверка через pymorphy3 на тег Name (имя собственное)
+    # 4. Проверка через pymorphy3 на тег Name (имя собственное)
     # Проверяем первое слово
     first_word = words[0] if words else name
     parsed = _first_parse(first_word)
@@ -510,8 +492,13 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     """
     Паттерн «другой/другое/другая/другие ... + <название параметра>»:
     - базовый шаблон: прилагательное "другой" + param_name;
-    - форму "другой" подбираем по падежу/роду/числу param_name (грубо по слову в именительном).
-    - param_name приводится к единственному числу.
+    - форму "другой" подбираем по роду главного существительного param_name.
+    - param_name используется как есть (без изменения формы).
+
+    Examples:
+        "марка машинки" → "Другая марка машинки" (марка - feminine)
+        "тип игрушки" → "Другой тип игрушки" (тип - masculine)
+        "цвет корпуса" → "Другой цвет корпуса" (цвет - masculine)
     """
     value = (value or "").strip()
     param_name = (param_name or "").strip()
@@ -522,13 +509,9 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     if not low.startswith("друг"):
         return None
 
-    # Приводим параметр к единственному числу
-    # "особенности" → "особенность"
-    param_name_singular = " ".join(singularize_noun(word) for word in param_name.split())
-
-    # Морфологический разбор названия параметра
     # Берём главное (головное) существительное из фразы
-    head = extract_head_noun(param_name_singular)
+    # Это первое существительное в именительном падеже
+    head = extract_head_noun(param_name)
     p = _first_parse(head)
     if not p:
         correct = f"Другой {param_name}"
@@ -536,18 +519,19 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
 
     tags = p.tag
     grammemes = set()
-    # род
+    # род - берем от главного существительного
     if "masc" in tags:
         grammemes.add("masc")
-    if "femn" in tags:
+    elif "femn" in tags:
         grammemes.add("femn")
-    if "neut" in tags:
+    elif "neut" in tags:
         grammemes.add("neut")
-    # число: по умолчанию единственное
-    if "plur" in tags:
-        grammemes.add("plur")
     else:
-        grammemes.add("sing")
+        # По умолчанию мужской род
+        grammemes.add("masc")
+
+    # число: всегда единственное для "другой"
+    grammemes.add("sing")
     # падеж — именительный
     grammemes.add("nomn")
 
@@ -562,10 +546,71 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     else:
         other_word = "Другой"
 
-    # Применяем правильную капитализацию к составной фразе (используем единственное число)
-    correct = normalize_compound_capitalization(f"{other_word} {param_name_singular}")
+    # Используем параметр как есть (без singularize)
+    # Применяем правильную капитализацию ко всей фразе
+    correct = normalize_compound_capitalization(f"{other_word} {param_name}")
     if value != correct:
         return value, correct
+    return None
+
+
+def check_param_name_agreement(param_name: str) -> Optional[Tuple[str, str]]:
+    """
+    Проверка грамматического согласования в составных параметрах.
+    В русском языке: "тип + существительное" требует родительный падеж второго слова.
+
+    Examples:
+        "тип фигурка" → "тип фигурки" (genitive)
+        "марка машинка" → "марка машинки" (genitive)
+        "цвет корпус" → "цвет корпуса" (genitive)
+    """
+    param_name = (param_name or "").strip()
+    if not param_name:
+        return None
+
+    words = param_name.split()
+    if len(words) < 2:
+        return None  # Одно слово - проверять нечего
+
+    # Проверяем первое слово - это должно быть существительное
+    first_word = words[0]
+    first_parse = _first_parse(first_word)
+    if not first_parse or "NOUN" not in first_parse.tag:
+        return None  # Первое слово не существительное
+
+    # Проверяем, что первое слово в именительном падеже
+    if "nomn" not in first_parse.tag:
+        return None
+
+    # Проверяем второе и последующие слова
+    corrected_words = [first_word]
+    has_changes = False
+
+    for word in words[1:]:
+        word_parse = _first_parse(word)
+        if word_parse and "NOUN" in word_parse.tag:
+            # Это существительное - должно быть в родительном падеже
+            if "gent" not in word_parse.tag:
+                # Не родительный падеж - исправляем
+                try:
+                    genitive_form = word_parse.inflect({"gent", "sing"})
+                    if genitive_form:
+                        corrected_words.append(genitive_form.word)
+                        has_changes = True
+                    else:
+                        corrected_words.append(word)
+                except Exception:
+                    corrected_words.append(word)
+            else:
+                corrected_words.append(word)
+        else:
+            # Не существительное - оставляем как есть
+            corrected_words.append(word)
+
+    if has_changes:
+        corrected = " ".join(corrected_words)
+        return param_name, corrected
+
     return None
 
 
@@ -988,12 +1033,27 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         pid = str(row.get(pid_col)) if pid_col in df.columns and not pd.isna(row.get(pid_col)) else None
 
-        # орфография имени параметра
+        # проверка имени параметра
         if param_col in df.columns and param_name:
+            param_corrections: List[str] = []
+            param_comments: List[str] = []
+
+            # грамматическое согласование в составных параметрах ("тип фигурка" → "тип фигурки")
+            agreement_issue = check_param_name_agreement(param_name)
+            if agreement_issue:
+                param_corrections.append(agreement_issue[1])
+                param_comments.append("Грамматическое согласование (второе существительное должно быть в родительном падеже)")
+
+            # орфография имени параметра
             spell_issue_param = check_spelling(param_name)
             if spell_issue_param:
-                df.at[idx, f"{param_col}__correct"] = spell_issue_param[1]
-                df.at[idx, f"{param_col}__comment"] = "Орфография/грамматика названия параметра"
+                if not param_corrections:
+                    param_corrections.append(spell_issue_param[1])
+                param_comments.append("Орфография/грамматика названия параметра")
+
+            if param_corrections:
+                df.at[idx, f"{param_col}__correct"] = param_corrections[0]
+                df.at[idx, f"{param_col}__comment"] = "; ".join(param_comments)
 
         # значение параметра
         if value_col in df.columns and param_value:
