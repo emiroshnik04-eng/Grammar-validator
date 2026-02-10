@@ -97,6 +97,7 @@ def check_spelling(text: str) -> Optional[Tuple[str, str]]:
     """
     Проверка орфографии/грамматики через LanguageTool.
     Возвращает (как_было, как_нужно) с первой авто-подсказкой, если есть.
+    Фильтрует замены е↔ё (оба варианта допустимы в русском языке).
     """
     if _LT is None:
         return None
@@ -109,16 +110,25 @@ def check_spelling(text: str) -> Optional[Tuple[str, str]]:
     if not matches:
         return None
 
-    first = matches[0]
-    if not first.replacements:
-        return None
+    # Находим первую валидную ошибку (не е↔ё замену)
+    for match in matches:
+        if not match.replacements:
+            continue
 
-    start = first.offset
-    end = start + first.errorLength
-    replacement = first.replacements[0]
-    corrected = text[:start] + replacement + text[end:]
-    if corrected != text:
-        return text, corrected
+        start = match.offset
+        end = start + match.errorLength
+        original_part = text[start:end]
+        replacement = match.replacements[0]
+
+        # Фильтруем замены е↔ё (оба варианта допустимы)
+        # Проверяем, отличаются ли строки только заменой е на ё или наоборот
+        if original_part.replace('е', 'ё').replace('Е', 'Ё') == replacement.replace('е', 'ё').replace('Е', 'Ё'):
+            continue  # Это е↔ё замена, пропускаем
+
+        corrected = text[:start] + replacement + text[end:]
+        if corrected != text:
+            return text, corrected
+
     return None
 
 
@@ -254,12 +264,13 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     - "USB кабели" -> "USB кабели" (не меняем)
     - "Игрушечный транспорт" -> "Игрушечный транспорт" (составное название, не меняем)
     - "Развивающие Игрушки" -> "Развивающие игрушки"
+    - "Детские наборы кассира" -> не меняем (кассира - родительный падеж, это правильно)
     """
     name = (name or "").strip()
     if not name:
         return None
 
-    # Проверка списка исключений (неисчисляемые)
+    # Проверка списка исключений (неисчисляемые) - case-insensitive
     low = name.lower()
     if low in _CATEGORY_MASS_LIKE:
         return None
@@ -275,9 +286,21 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     if is_abbreviation:
         return None  # Не трогаем аббревиатуры типа "USB", "DVD"
 
-    # Анализируем последнее слово (главное существительное в составных названиях)
-    main_word = words[-1] if len(words) > 1 else name
-    prefix = " ".join(words[:-1]) + " " if len(words) > 1 else ""
+    # Находим главное существительное (первое существительное в именительном падеже)
+    # В русском: "Детские наборы кассира" - главное "наборы" (nomn), "кассира" (gent) - модификатор
+    main_word = None
+    main_word_idx = -1
+    for idx, word in enumerate(words):
+        p = _first_parse(word)
+        if p and "NOUN" in p.tag and "nomn" in p.tag:
+            main_word = word
+            main_word_idx = idx
+            break
+
+    # Если не нашли именительный падеж, берём последнее слово (старая логика)
+    if main_word is None:
+        main_word = words[-1] if len(words) > 1 else name
+        main_word_idx = len(words) - 1
 
     # Парсим главное слово
     parsed = _first_parse(main_word)
@@ -290,15 +313,25 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
 
     # Формируем правильную форму: именительный падеж + мн.число
     try:
-        # Приводим к им.падежу, мн.числу
+        # Если главное слово уже в именительном падеже и множественном числе - проверяем только капитализацию
+        if is_nominative and is_plural:
+            # Только исправляем капитализацию
+            full_corrected = normalize_compound_capitalization(name)
+            if full_corrected != name:
+                return name, full_corrected
+            return None
+
+        # Приводим главное слово к им.падежу, мн.числу
         correct_form = parsed.inflect({"nomn", "plur"})
         if not correct_form:
             return None
 
-        corrected = correct_form.word
+        corrected_main = correct_form.word
 
-        # Собираем полное название с префиксом
-        full_corrected = prefix + corrected
+        # Собираем полное название, заменяя только главное слово
+        corrected_words = words.copy()
+        corrected_words[main_word_idx] = corrected_main
+        full_corrected = " ".join(corrected_words)
 
         # Применяем правильную капитализацию (первое слово заглавное, остальные маленькие кроме исключений)
         full_corrected = normalize_compound_capitalization(full_corrected)
@@ -386,7 +419,8 @@ def normalize_compound_capitalization(text: str) -> str:
                 else:
                     result_parts.append(part.lower())
             return '-'.join(result_parts)
-        return text
+        # Single word without hyphen - capitalize it
+        return text.capitalize() if text else text
 
     result = []
 
@@ -546,9 +580,26 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     else:
         other_word = "Другой"
 
-    # Используем параметр как есть (без singularize)
+    # Singularize nouns in param_name that are in nominative plural
+    # Example: "особенности" → "особенность", but "марка машинки" stays (машинки is genitive)
+    param_words = param_name.split()
+    singularized_words = []
+    for word in param_words:
+        word_parse = _first_parse(word)
+        if word_parse and "NOUN" in word_parse.tag and "plur" in word_parse.tag and "nomn" in word_parse.tag:
+            # Nominative plural noun - singularize it
+            singular_form = word_parse.inflect({"sing", "nomn"})
+            if singular_form:
+                singularized_words.append(singular_form.word)
+            else:
+                singularized_words.append(word)
+        else:
+            singularized_words.append(word)
+
+    param_name_singular = " ".join(singularized_words)
+
     # Применяем правильную капитализацию ко всей фразе
-    correct = normalize_compound_capitalization(f"{other_word} {param_name}")
+    correct = normalize_compound_capitalization(f"{other_word} {param_name_singular}")
     if value != correct:
         return value, correct
     return None
@@ -1165,7 +1216,9 @@ def write_with_highlight(df_processed: pd.DataFrame, output_path: str) -> None:
                     continue
 
                 correct_cell = ws.cell(row=row_idx, column=col_index[correct_col])
-                if correct_cell.value not in (None, "", " "):
+                # Проверяем, что ячейка действительно содержит исправление (не пустая строка)
+                correction_value = str(correct_cell.value).strip() if correct_cell.value is not None else ""
+                if correction_value and correction_value != "":
                     # Подсвечиваем оригинальную ячейку с ошибкой красным
                     base_cell = ws.cell(row=row_idx, column=col_index[name])
                     base_cell.fill = error_fill
