@@ -22,6 +22,7 @@
 
 ## Возможности
 
+- ✅ **Dependency parsing** - UDPipe для точного синтаксического анализа (правильно определяет "наборы кассира")
 - ✅ **Real-time progress tracking** - SSE-based progress bar with live percentage updates
 - ✅ **Smart filtering** - Results contain only corrected rows (no unchanged data)
 - ✅ **English Material Design UI** - Modern, responsive interface with Material Design 3
@@ -68,6 +69,7 @@ python check_catalog.py
 - **Python 3.8+**
 - **Java** (для LanguageTool орфографии) - опционально
 - **OpenAI API ключ** (для LLM-анализа) - опционально
+- **UDPipe** (для dependency parsing) - устанавливается автоматически
 
 ### Установка Java (для орфографии)
 

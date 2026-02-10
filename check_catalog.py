@@ -15,6 +15,9 @@ load_dotenv()
 # Импортируем настройку логирования
 from logging_config import setup_logging
 
+# Импортируем dependency parser
+from dependency_parser import get_parser
+
 # Настраиваем логирование
 logger = setup_logging()
 
@@ -252,19 +255,21 @@ def is_proper_noun_or_compound(name: str) -> bool:
 
 def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     """
-    Проверка формата названия категории по спецификации:
+    Проверка формата названия категории по спецификации с использованием dependency parsing.
+
+    Правила:
     1. Первая буква заглавная (кроме аббревиатур/брендов)
     2. Именительный падеж (nominative)
     3. Множественное число (кроме неисчисляемых и составных названий)
     4. Второе слово с маленькой буквы (кроме имён собственных/аббревиатур)
+    5. НЕ ТРОГАЕМ конструкции с генитивным модификатором (X родительный падеж)
 
     Примеры:
     - "игрушка" -> "Игрушки"
     - "игрушек" -> "Игрушки"
-    - "USB кабели" -> "USB кабели" (не меняем)
-    - "Игрушечный транспорт" -> "Игрушечный транспорт" (составное название, не меняем)
-    - "Развивающие Игрушки" -> "Развивающие игрушки"
-    - "Детские наборы кассира" -> не меняем (кассира - родительный падеж, это правильно)
+    - "Детские наборы кассира" -> НЕ МЕНЯЕМ (кассира - родительный падеж, правильно)
+    - "Игрушечный транспорт" -> НЕ МЕНЯЕМ (неисчисляемое)
+    - "Развивающие Игрушки" -> "Развивающие игрушки" (только капитализация)
     """
     name = (name or "").strip()
     if not name:
@@ -279,15 +284,66 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     if is_proper_noun_or_compound(name):
         return None
 
-    # Проверяем, является ли это аббревиатурой (все буквы заглавные, > 1 буквы)
+    # Проверяем, является ли это аббревиатурой
     words = name.split()
     is_abbreviation = len(name) > 1 and name.replace(" ", "").isupper() and name.replace(" ", "").isalpha()
-
     if is_abbreviation:
-        return None  # Не трогаем аббревиатуры типа "USB", "DVD"
+        return None
 
+    # === НОВЫЙ ПОДХОД: Dependency Parsing ===
+    # Пытаемся использовать dependency parser для точного анализа
+    parser = get_parser()
+    if parser:
+        try:
+            analysis = parser.analyze_structure(name)
+
+            # Если есть генитивный модификатор (например, "наборы кассира"), не трогаем!
+            if analysis['has_genitive']:
+                # Только исправляем капитализацию
+                full_corrected = normalize_compound_capitalization(name)
+                if full_corrected != name:
+                    return name, full_corrected
+                return None
+
+            # Находим главное существительное через dependency parsing
+            head_info = analysis['head_noun']
+            if head_info:
+                head_word, head_node = head_info
+
+                # Если главное слово уже в правильной форме (Nominative + Plural)
+                if head_node.is_nominative() and head_node.is_plural():
+                    # Только капитализация
+                    full_corrected = normalize_compound_capitalization(name)
+                    if full_corrected != name:
+                        return name, full_corrected
+                    return None
+
+                # Нужно привести к множественному числу
+                # Используем pymorphy3 для inflection
+                for idx, word in enumerate(words):
+                    if word.lower() == head_word.lower():
+                        # Это главное слово, inflect его
+                        p = _first_parse(word)
+                        if p and "NOUN" in p.tag:
+                            correct_form = p.inflect({"nomn", "plur"})
+                            if correct_form:
+                                corrected_words = words.copy()
+                                corrected_words[idx] = correct_form.word
+
+                                full_corrected = " ".join(corrected_words)
+                                full_corrected = normalize_compound_capitalization(full_corrected)
+
+                                if full_corrected != name:
+                                    return name, full_corrected
+                        break
+
+        except Exception as e:
+            # Fallback to old logic if dependency parsing fails
+            print(f"[ensure_category_format] Dependency parsing failed: {e}, using fallback")
+            pass
+
+    # === FALLBACK: Старая логика (если UDPipe недоступен или упал) ===
     # Находим главное существительное (первое существительное в именительном падеже)
-    # В русском: "Детские наборы кассира" - главное "наборы" (nomn), "кассира" (gent) - модификатор
     main_word = None
     main_word_idx = -1
     for idx, word in enumerate(words):
@@ -297,7 +353,7 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
             main_word_idx = idx
             break
 
-    # Если не нашли именительный падеж, берём последнее слово (старая логика)
+    # Если не нашли именительный падеж, берём последнее слово
     if main_word is None:
         main_word = words[-1] if len(words) > 1 else name
         main_word_idx = len(words) - 1
@@ -305,17 +361,16 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     # Парсим главное слово
     parsed = _first_parse(main_word)
     if not parsed or "NOUN" not in parsed.tag:
-        return None  # Не существительное - не трогаем
+        return None
 
     # Проверяем текущее состояние
     is_plural = "plur" in parsed.tag
     is_nominative = "nomn" in parsed.tag
 
-    # Формируем правильную форму: именительный падеж + мн.число
+    # Формируем правильную форму
     try:
-        # Если главное слово уже в именительном падеже и множественном числе - проверяем только капитализацию
+        # Если главное слово уже в именительном падеже и множественном числе
         if is_nominative and is_plural:
-            # Только исправляем капитализацию
             full_corrected = normalize_compound_capitalization(name)
             if full_corrected != name:
                 return name, full_corrected
@@ -328,12 +383,10 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
 
         corrected_main = correct_form.word
 
-        # Собираем полное название, заменяя только главное слово
+        # Собираем полное название
         corrected_words = words.copy()
         corrected_words[main_word_idx] = corrected_main
         full_corrected = " ".join(corrected_words)
-
-        # Применяем правильную капитализацию (первое слово заглавное, остальные маленькие кроме исключений)
         full_corrected = normalize_compound_capitalization(full_corrected)
 
         if full_corrected != name:

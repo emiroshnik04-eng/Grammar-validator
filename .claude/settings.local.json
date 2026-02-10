@@ -25,7 +25,9 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(d:)",
-      "Bash(create_desktop_shortcut.bat)"
+      "Bash(create_desktop_shortcut.bat)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }
