@@ -15,6 +15,9 @@ load_dotenv()
 # Импортируем настройку логирования
 from logging_config import setup_logging
 
+# Импортируем лингвистические правила
+from linguistic_rules import PhraseAnalyzer, GenitiveCorrector, CategoryValidator
+
 # Dependency parser temporarily disabled for stability
 # Will re-enable after thorough testing
 DEPENDENCY_PARSER_AVAILABLE = False
@@ -260,29 +263,26 @@ def is_proper_noun_or_compound(name: str) -> bool:
 
 def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
     """
-    Проверка формата названия категории по спецификации с использованием dependency parsing.
+    Проверка формата названия категории с использованием лингвистического анализа.
 
     Правила:
     1. Первая буква заглавная (кроме аббревиатур/брендов)
     2. Именительный падеж (nominative)
     3. Множественное число (кроме неисчисляемых и составных названий)
     4. Второе слово с маленькой буквы (кроме имён собственных/аббревиатур)
-    5. НЕ ТРОГАЕМ конструкции с генитивным модификатором (X родительный падеж)
+    5. НЕ ТРОГАЕМ правильные генитивные конструкции (NOUN(nomn) + NOUN(gent))
 
     Примеры:
     - "игрушка" -> "Игрушки"
     - "игрушек" -> "Игрушки"
-    - "Детские наборы кассира" -> НЕ МЕНЯЕМ (кассира - родительный падеж, правильно)
+    - "Детские наборы кассира" -> НЕ МЕНЯЕМ (правильная генитивная конструкция!)
+    - "наборы кассира" -> "Наборы кассира" (только капитализация)
     - "Игрушечный транспорт" -> НЕ МЕНЯЕМ (неисчисляемое)
     - "Развивающие Игрушки" -> "Развивающие игрушки" (только капитализация)
+    - "тип фигурка" -> "Тип фигурки" (исправляем неправильную конструкцию)
     """
     name = (name or "").strip()
     if not name:
-        return None
-
-    # Проверка списка исключений (неисчисляемые) - case-insensitive
-    low = name.lower()
-    if low in _CATEGORY_MASS_LIKE:
         return None
 
     # Проверка имён собственных, брендов и составных названий (не трогаем)
@@ -290,31 +290,53 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
         return None
 
     # Проверяем, является ли это аббревиатурой
-    words = name.split()
     is_abbreviation = len(name) > 1 and name.replace(" ", "").isupper() and name.replace(" ", "").isalpha()
     if is_abbreviation:
         return None
 
-    # === Валидация через pymorphy3 ===
-    # Находим главное существительное (первое существительное в именительном падеже)
-    main_word = None
-    main_word_idx = -1
-    for idx, word in enumerate(words):
-        p = _first_parse(word)
-        if p and "NOUN" in p.tag and "nomn" in p.tag:
-            main_word = word
-            main_word_idx = idx
-            break
+    # === ЛИНГВИСТИЧЕСКИЙ АНАЛИЗ ===
+    analysis = PhraseAnalyzer.analyze_structure(name)
 
-    # Если не нашли именительный падеж, берём последнее слово
-    if main_word is None:
-        main_word = words[-1] if len(words) > 1 else name
-        main_word_idx = len(words) - 1
+    # Если это правильная генитивная конструкция - НЕ ТРОГАЕМ!
+    # Примеры: "наборы кассира", "марка машинки"
+    if analysis['type'] == 'genitive_construction' and analysis['is_correct']:
+        # Применяем только капитализацию, не меняем форму
+        full_corrected = normalize_compound_capitalization(name)
+        if full_corrected != name:
+            return name, full_corrected
+        return None
+
+    # Если это ADJ + NOUN фраза - применяем только капитализацию
+    # Примеры: "Детские наборы", "Красные машинки"
+    if analysis['type'] == 'adj_noun' and analysis['is_correct']:
+        full_corrected = normalize_compound_capitalization(name)
+        if full_corrected != name:
+            return name, full_corrected
+        return None
+
+    # Если это ошибочная конструкция (два nominative) - нужно исправить
+    # Примеры: "тип фигурка" -> "тип фигурки"
+    if analysis['type'] == 'compound_error' and analysis['needs_genitive_fix']:
+        genitive_fix = GenitiveCorrector.fix_genitive_agreement(name)
+        if genitive_fix:
+            corrected = normalize_compound_capitalization(genitive_fix[1])
+            return name, corrected
+
+    # Одно слово или простая конструкция - применяем стандартную логику
+    words = name.split()
+    main_word = analysis.get('main_noun', words[-1] if words else name)
 
     # Парсим главное слово
     parsed = _first_parse(main_word)
     if not parsed or "NOUN" not in parsed.tag:
+        # Не существительное - просто капитализация
+        full_corrected = normalize_compound_capitalization(name)
+        if full_corrected != name:
+            return name, full_corrected
         return None
+
+    # Проверяем нужно ли множественное число
+    should_pluralize = CategoryValidator.should_pluralize(name, _CATEGORY_MASS_LIKE)
 
     # Проверяем текущее состояние
     is_plural = "plur" in parsed.tag
@@ -322,6 +344,13 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
 
     # Формируем правильную форму
     try:
+        # Если не нужно множественное число - только капитализация
+        if not should_pluralize:
+            full_corrected = normalize_compound_capitalization(name)
+            if full_corrected != name:
+                return name, full_corrected
+            return None
+
         # Если главное слово уже в именительном падеже и множественном числе
         if is_nominative and is_plural:
             full_corrected = normalize_compound_capitalization(name)
@@ -335,6 +364,16 @@ def ensure_category_format(name: str) -> Optional[Tuple[str, str]]:
             return None
 
         corrected_main = correct_form.word
+
+        # Находим индекс главного слова
+        main_word_idx = -1
+        for idx, word in enumerate(words):
+            if word == main_word:
+                main_word_idx = idx
+                break
+
+        if main_word_idx == -1:
+            main_word_idx = len(words) - 1
 
         # Собираем полное название
         corrected_words = words.copy()
@@ -613,80 +652,25 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
 
 def check_param_name_agreement(param_name: str) -> Optional[Tuple[str, str]]:
     """
-    Проверка грамматического согласования в составных параметрах.
-    В русском языке: "тип + существительное" требует родительный падеж второго слова.
+    Проверка грамматического согласования в составных параметрах
+    с использованием лингвистического анализа.
+
+    В русском языке: "NOUN(nomn) + NOUN" требует родительный падеж второго слова.
 
     Examples:
         "тип фигурка" → "тип фигурки" (genitive)
         "марка машинка" → "марка машинки" (genitive)
         "цвет корпус" → "цвет корпуса" (genitive)
+        "марка машинки" → None (уже правильно!)
+        "наборы кассира" → None (уже правильно!)
     """
     param_name = (param_name or "").strip()
     if not param_name:
         return None
 
-    words = param_name.split()
-    if len(words) < 2:
-        return None  # Одно слово - проверять нечего
-
-    # Проверяем первое слово - это должно быть существительное
-    first_word = words[0]
-    first_parse = _first_parse(first_word)
-    if not first_parse or "NOUN" not in first_parse.tag:
-        return None  # Первое слово не существительное
-
-    # Проверяем, что первое слово в именительном падеже
-    if "nomn" not in first_parse.tag:
-        return None
-
-    # Проверяем второе и последующие слова
-    corrected_words = [first_word]
-    has_changes = False
-
-    for word in words[1:]:
-        word_parse = _first_parse(word)
-        if word_parse and "NOUN" in word_parse.tag:
-            # Это существительное - должно быть в родительном падеже
-            if "gent" not in word_parse.tag:
-                # Не родительный падеж - исправляем
-                try:
-                    # Пробуем генитив с сохранением числа
-                    if "plur" in word_parse.tag:
-                        genitive_form = word_parse.inflect({"gent", "plur"})
-                    else:
-                        genitive_form = word_parse.inflect({"gent", "sing"})
-
-                    if genitive_form:
-                        corrected_words.append(genitive_form.word)
-                        has_changes = True
-                    else:
-                        corrected_words.append(word)
-                except Exception:
-                    corrected_words.append(word)
-            else:
-                corrected_words.append(word)
-        elif word_parse and ("ADJF" in word_parse.tag or "ADJS" in word_parse.tag):
-            # Прилагательное - пытаемся найти существительное-основу
-            # Например "плюш" может быть сокращением от "плюшевый"
-            try:
-                # Пробуем родительный падеж для прилагательного тоже
-                genitive_form = word_parse.inflect({"gent", "sing"})
-                if genitive_form:
-                    corrected_words.append(genitive_form.word)
-                    has_changes = True
-                else:
-                    corrected_words.append(word)
-            except Exception:
-                corrected_words.append(word)
-        else:
-            # Не существительное и не прилагательное - оставляем как есть
-            corrected_words.append(word)
-
-    if has_changes:
-        corrected = " ".join(corrected_words)
-        return param_name, corrected
-
-    return None
+    # Используем GenitiveCorrector для проверки
+    result = GenitiveCorrector.fix_genitive_agreement(param_name)
+    return result
 
 
 def check_case_consistency(value: str, expected_case: str) -> Optional[Tuple[str, str]]:
