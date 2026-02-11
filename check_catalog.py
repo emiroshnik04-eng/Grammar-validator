@@ -125,8 +125,12 @@ def check_spelling(text: str) -> Optional[Tuple[str, str]]:
         replacement = match.replacements[0]
 
         # Фильтруем замены е↔ё (оба варианта допустимы)
-        # Проверяем, отличаются ли строки только заменой е на ё или наоборот
-        if original_part.replace('е', 'ё').replace('Е', 'Ё') == replacement.replace('е', 'ё').replace('Е', 'Ё'):
+        # Нормализуем обе строки заменой ё→е и сравниваем
+        # Если после нормализации одинаковые → единственное отличие это е↔ё
+        normalized_original = original_part.replace('ё', 'е').replace('Ё', 'Е')
+        normalized_replacement = replacement.replace('ё', 'е').replace('Ё', 'Е')
+
+        if normalized_original == normalized_replacement:
             continue  # Это е↔ё замена, пропускаем
 
         corrected = text[:start] + replacement + text[end:]
@@ -646,7 +650,12 @@ def check_param_name_agreement(param_name: str) -> Optional[Tuple[str, str]]:
             if "gent" not in word_parse.tag:
                 # Не родительный падеж - исправляем
                 try:
-                    genitive_form = word_parse.inflect({"gent", "sing"})
+                    # Пробуем генитив с сохранением числа
+                    if "plur" in word_parse.tag:
+                        genitive_form = word_parse.inflect({"gent", "plur"})
+                    else:
+                        genitive_form = word_parse.inflect({"gent", "sing"})
+
                     if genitive_form:
                         corrected_words.append(genitive_form.word)
                         has_changes = True
@@ -656,8 +665,21 @@ def check_param_name_agreement(param_name: str) -> Optional[Tuple[str, str]]:
                     corrected_words.append(word)
             else:
                 corrected_words.append(word)
+        elif word_parse and ("ADJF" in word_parse.tag or "ADJS" in word_parse.tag):
+            # Прилагательное - пытаемся найти существительное-основу
+            # Например "плюш" может быть сокращением от "плюшевый"
+            try:
+                # Пробуем родительный падеж для прилагательного тоже
+                genitive_form = word_parse.inflect({"gent", "sing"})
+                if genitive_form:
+                    corrected_words.append(genitive_form.word)
+                    has_changes = True
+                else:
+                    corrected_words.append(word)
+            except Exception:
+                corrected_words.append(word)
         else:
-            # Не существительное - оставляем как есть
+            # Не существительное и не прилагательное - оставляем как есть
             corrected_words.append(word)
 
     if has_changes:
@@ -1174,8 +1196,11 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         """Check if row has any corrections in any __correct column"""
         for col in df.columns:
             if col.endswith("__correct"):
+                # Проверяем что значение не пустое, не NaN, не "nan" строка
+                if pd.isna(row[col]):
+                    continue
                 val = str(row[col]).strip()
-                if val and val != "" and not pd.isna(row[col]):
+                if val and val != "" and val.lower() != "nan":
                     return True
         return False
 
