@@ -15,8 +15,15 @@ load_dotenv()
 # Импортируем настройку логирования
 from logging_config import setup_logging
 
-# Импортируем dependency parser
-from dependency_parser import get_parser
+# Импортируем dependency parser (опционально - graceful degradation)
+try:
+    from dependency_parser import get_parser
+    DEPENDENCY_PARSER_AVAILABLE = True
+except Exception as e:
+    print(f"[WARNING] Dependency parser unavailable: {e}")
+    print("[WARNING] Using fallback to pymorphy3 only")
+    get_parser = lambda: None
+    DEPENDENCY_PARSER_AVAILABLE = False
 
 # Настраиваем логирование
 logger = setup_logging()
