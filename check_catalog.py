@@ -541,6 +541,11 @@ def extract_head_noun(phrase: str) -> str:
     Extract grammatical head (main noun) from a phrase.
     In Russian, the head noun is typically the FIRST noun in NOMINATIVE case.
 
+    IMPORTANT: Use ALL parses to avoid disambiguation errors.
+    For example, "марка" can be parsed as:
+    - "марка" (femn, nomn) - trademark/brand (correct)
+    - "Марк" (masc, gent, Name) - genitive of name "Mark" (incorrect)
+
     Examples:
         "тип плюшевой игрушки" → "тип" (nominative, masculine)
         "марка автомобиля" → "марка" (nominative, feminine)
@@ -551,13 +556,30 @@ def extract_head_noun(phrase: str) -> str:
     if not words:
         return phrase
 
-    # First, try to find the first noun in nominative case
+    # First, try to find the first noun in nominative case (non-Name)
+    # Check ALL parses, not just the first one
     for word in words:
-        p = _first_parse(word)
-        if p and "NOUN" in p.tag and "nomn" in p.tag:
-            return word
+        all_parses = morph.parse(word)
+        for p in all_parses:
+            # Prefer non-Name nouns in nominative case
+            if "NOUN" in p.tag and "nomn" in p.tag and "Name" not in p.tag:
+                return word
 
-    # If no nominative noun, take first noun (any case)
+    # Second pass: accept Name nouns in nominative if no other option
+    for word in words:
+        all_parses = morph.parse(word)
+        for p in all_parses:
+            if "NOUN" in p.tag and "nomn" in p.tag:
+                return word
+
+    # Third pass: any noun (any case, non-Name preferred)
+    for word in words:
+        all_parses = morph.parse(word)
+        for p in all_parses:
+            if "NOUN" in p.tag and "Name" not in p.tag:
+                return word
+
+    # Fourth pass: any noun (including Name)
     for word in words:
         p = _first_parse(word)
         if p and "NOUN" in p.tag:
@@ -591,12 +613,36 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     # Берём главное (головное) существительное из фразы
     # Это первое существительное в именительном падеже
     head = extract_head_noun(param_name)
-    p = _first_parse(head)
-    if not p:
+
+    # Проверяем ВСЕ парсы чтобы избежать ошибок disambiguation
+    # Например, "марка" может быть:
+    # - "марка" (femn, nomn) - правильно
+    # - "Марк" (masc, gent, Name) - неправильно
+    all_parses = morph.parse(head)
+    best_parse = None
+
+    # Приоритет 1: NOUN + nomn + не Name
+    for p in all_parses:
+        if "NOUN" in p.tag and "nomn" in p.tag and "Name" not in p.tag:
+            best_parse = p
+            break
+
+    # Приоритет 2: NOUN + nomn (даже если Name)
+    if not best_parse:
+        for p in all_parses:
+            if "NOUN" in p.tag and "nomn" in p.tag:
+                best_parse = p
+                break
+
+    # Приоритет 3: любой NOUN
+    if not best_parse:
+        best_parse = _first_parse(head)
+
+    if not best_parse:
         correct = f"Другой {param_name}"
         return (value, correct) if value != correct else None
 
-    tags = p.tag
+    tags = best_parse.tag
     grammemes = set()
     # род - берем от главного существительного
     if "masc" in tags:
