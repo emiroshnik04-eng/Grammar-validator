@@ -36,7 +36,8 @@ logger = setup_logging()
 """
 
 
-LLM_API_KEY = os.environ.get("LLM_API_KEY")
+# Поддерживаем оба названия для обратной совместимости
+LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
 LLM_API_URL = os.environ.get("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4-turbo")
 

@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # URL semantic service для анализа ошибок
 SEMANTIC_URL = os.environ.get("SEMANTIC_URL", "http://127.0.0.1:8000")
 ERROR_ANALYSIS_ENDPOINT = f"{SEMANTIC_URL}/analyze-error"
-LLM_API_KEY = os.environ.get("LLM_API_KEY")
+# Поддерживаем оба названия для обратной совместимости
+LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
 
 async def analyze_error_async(error: Exception, context: Optional[str] = None) -> Optional[Dict[str, Any]]:
