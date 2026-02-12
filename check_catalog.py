@@ -673,19 +673,40 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
 
     # Singularize nouns in param_name that are in nominative plural
     # Example: "особенности" → "особенность", but "марка машинки" stays (машинки is genitive)
+    # IMPORTANT: Don't touch nouns that come after another noun - they are likely in genitive case
     param_words = param_name.split()
     singularized_words = []
-    for word in param_words:
+    prev_was_noun = False
+
+    for i, word in enumerate(param_words):
         word_parse = _first_parse(word)
-        if word_parse and "NOUN" in word_parse.tag and "plur" in word_parse.tag and "nomn" in word_parse.tag:
-            # Nominative plural noun - singularize it
-            singular_form = word_parse.inflect({"sing", "nomn"})
-            if singular_form:
-                singularized_words.append(singular_form.word)
-            else:
+        is_noun = word_parse and "NOUN" in word_parse.tag
+
+        # Check if this looks like nominative plural
+        is_nomn_plur = is_noun and "plur" in word_parse.tag and "nomn" in word_parse.tag
+
+        # BUT: if previous word was a noun, this one is likely genitive (not nominative)
+        # Example: "тип игрушки" - "игрушки" is genitive, not nominative plural
+        if is_nomn_plur and not prev_was_noun:
+            # Check all parses to avoid false positives
+            all_parses = _MORPH.parse(word)
+            # If any parse suggests genitive singular, keep original word
+            has_genitive_sing = any("gent" in p.tag and "sing" in p.tag for p in all_parses)
+
+            if has_genitive_sing and i > 0:
+                # Likely genitive case - don't singularize
                 singularized_words.append(word)
+            else:
+                # True nominative plural - singularize it
+                singular_form = word_parse.inflect({"sing", "nomn"})
+                if singular_form:
+                    singularized_words.append(singular_form.word)
+                else:
+                    singularized_words.append(word)
         else:
             singularized_words.append(word)
+
+        prev_was_noun = is_noun
 
     param_name_singular = " ".join(singularized_words)
 
