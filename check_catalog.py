@@ -559,7 +559,7 @@ def extract_head_noun(phrase: str) -> str:
     # First, try to find the first noun in nominative case (non-Name)
     # Check ALL parses, not just the first one
     for word in words:
-        all_parses = morph.parse(word)
+        all_parses = _MORPH.parse(word)
         for p in all_parses:
             # Prefer non-Name nouns in nominative case
             if "NOUN" in p.tag and "nomn" in p.tag and "Name" not in p.tag:
@@ -567,14 +567,14 @@ def extract_head_noun(phrase: str) -> str:
 
     # Second pass: accept Name nouns in nominative if no other option
     for word in words:
-        all_parses = morph.parse(word)
+        all_parses = _MORPH.parse(word)
         for p in all_parses:
             if "NOUN" in p.tag and "nomn" in p.tag:
                 return word
 
     # Third pass: any noun (any case, non-Name preferred)
     for word in words:
-        all_parses = morph.parse(word)
+        all_parses = _MORPH.parse(word)
         for p in all_parses:
             if "NOUN" in p.tag and "Name" not in p.tag:
                 return word
@@ -618,7 +618,7 @@ def normalize_other_pattern(param_name: str, value: str) -> Optional[Tuple[str, 
     # Например, "марка" может быть:
     # - "марка" (femn, nomn) - правильно
     # - "Марк" (masc, gent, Name) - неправильно
-    all_parses = morph.parse(head)
+    all_parses = _MORPH.parse(head)
     best_parse = None
 
     # Приоритет 1: NOUN + nomn + не Name
