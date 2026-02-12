@@ -115,6 +115,37 @@ The system SHALL determine the grammatical gender of "Другой/Другая/
 - **WHEN** "Другой" pattern is applied
 - **THEN** system uses "Другой цвет" (masculine form)
 
+### Requirement: Genitive Case Preservation in "Другой" Pattern
+The system SHALL preserve genitive case endings when correcting compound parameter names with "Другой/Другая/Другое" pattern. The system SHALL NOT incorrectly convert genitive case nouns to nominative case.
+
+#### Scenario: Genitive case preserved in compound parameter
+- **GIVEN** parameter value "Другой Тип плюшевой игрушка" (incorrect: "игрушка" should be "игрушки")
+- **AND** parameter name is "Тип плюшевой игрушки" (genitive case)
+- **WHEN** validation runs
+- **THEN** system suggests "Другой тип плюшевой игрушки" (genitive "игрушки" preserved)
+- **AND** does NOT suggest "Другой тип плюшевой игрушка" (nominative)
+
+#### Scenario: Genitive case in two-word parameter
+- **GIVEN** parameter value "Другой марка машинки" (incorrect gender)
+- **AND** parameter name is "марка машинки" (genitive case)
+- **WHEN** validation runs
+- **THEN** system suggests "Другая марка машинки" (genitive "машинки" preserved)
+- **AND** gender agrees with "марка" (feminine)
+
+#### Scenario: Nominative plural correctly singularized
+- **GIVEN** parameter value "Другой особенности" (nominative plural)
+- **AND** parameter name is "особенности" (nominative plural)
+- **WHEN** validation runs
+- **THEN** system suggests "Другая особенность" (singular nominative)
+- **AND** recognizes this is truly plural nominative, not genitive
+
+#### Scenario: Detection logic
+- **GIVEN** noun ending in "-и" or "-ы" after another noun
+- **WHEN** system analyzes morphology
+- **THEN** system checks if word can be genitive singular
+- **AND** if word is not first in phrase, preserves ending (likely genitive)
+- **AND** if word is first in phrase and only nominative plural parse exists, singularizes it
+
 ### Requirement: Results Filtering
 The system SHALL output ONLY rows that contain corrections or errors in the validated result file.
 

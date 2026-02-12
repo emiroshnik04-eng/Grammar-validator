@@ -19,10 +19,20 @@
 - [x] 3.2 Ensure grammar errors are added to `__comment` column with clear descriptions
 - [x] 3.3 Test with known problematic words to confirm highlighting works
 
-## 4. Testing and Validation
-- [x] 4.1 Create test_improvements.py with unit tests for new functions
-- [x] 4.2 Test case consistency check with mixed case values
-- [x] 4.3 Test proper noun detection with compound category names like "Детский мир"
-- [x] 4.4 Test brand name detection with Latin characters and numbers
-- [x] 4.5 Verify Python syntax with py_compile
-- [x] 4.6 All tests passed successfully
+## 4. Genitive Case Preservation
+- [x] 4.1 Add logic to detect genitive singular nouns (checking all morphological parses)
+- [x] 4.2 Modify singularization logic in `normalize_other_pattern` to preserve genitive case
+- [x] 4.3 Add check for position in phrase (don't touch nouns after other nouns)
+- [x] 4.4 Create test_игрушки.py with genitive case test cases
+- [x] 4.5 Test "Тип плюшевой игрушки" → "Другой тип плюшевой игрушки" (genitive preserved)
+- [x] 4.6 Test "марка машинки" → "Другая марка машинки" (genitive preserved)
+- [x] 4.7 Update specification with new requirement and scenarios
+
+## 5. Testing and Validation
+- [x] 5.1 Create test_improvements.py with unit tests for new functions
+- [x] 5.2 Test case consistency check with mixed case values
+- [x] 5.3 Test proper noun detection with compound category names like "Детский мир"
+- [x] 5.4 Test brand name detection with Latin characters and numbers
+- [x] 5.5 Verify Python syntax with py_compile
+- [x] 5.6 All tests passed successfully
+- [x] 5.7 Genitive case tests passed successfully
