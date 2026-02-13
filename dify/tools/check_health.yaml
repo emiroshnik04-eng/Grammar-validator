@@ -1,0 +1,38 @@
+identity:
+  name: check_health
+  author: Grammar Validator Team
+  label:
+    en_US: Check Health
+    ru_RU: Проверить работоспособность
+  icon: health.svg
+
+description:
+  human:
+    en_US: Checks if the validator service is healthy and LLM API is configured
+    ru_RU: Проверяет работоспособность сервиса валидатора и конфигурацию LLM API
+  llm: |
+    This tool performs a health check on the catalog validator service:
+    - Service availability status
+    - LLM API configuration status
+    - Service version information
+
+    Use this to verify the service is operational before performing validations.
+
+parameters: []
+
+output:
+  status:
+    type: string
+    description: Service status (healthy/unhealthy)
+  llm_configured:
+    type: boolean
+    description: Whether LLM API key is properly configured
+  version:
+    type: string
+    description: Service version number
+
+api:
+  method: GET
+  url: https://catalog-validator.onrender.com/api/health
+  headers:
+    Content-Type: application/json

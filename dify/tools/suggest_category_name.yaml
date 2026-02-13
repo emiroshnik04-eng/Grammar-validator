@@ -1,0 +1,64 @@
+identity:
+  name: suggest_category_name
+  author: Grammar Validator Team
+  label:
+    en_US: Suggest Category Name
+    ru_RU: Предложить название категории
+  icon: suggest.svg
+
+description:
+  human:
+    en_US: Uses LLM to analyze category name and suggest correct singular/plural form
+    ru_RU: Использует LLM для анализа названия категории и предложения правильной формы (единственное/множественное число)
+  llm: |
+    This tool uses Language Model to intelligently analyze Russian category names and determine:
+    - Whether the category should be in singular or plural form
+    - If it's a proper noun or brand name (should not be pluralized)
+    - Suggested correct name with explanation
+
+    Useful for validating category naming conventions in product catalogs.
+
+parameters:
+  - name: name
+    type: string
+    required: true
+    label:
+      en_US: Category Name
+      ru_RU: Название категории
+    human_description:
+      en_US: Current category name to analyze
+      ru_RU: Текущее название категории для анализа
+    llm_description: The category name to analyze (e.g., "Игрушка" or "Детский мир")
+    form: llm
+
+  - name: path
+    type: string
+    required: true
+    label:
+      en_US: Category Path
+      ru_RU: Путь категории
+    human_description:
+      en_US: Full category path for context
+      ru_RU: Полный путь категории для контекста
+    llm_description: Full category path for context (e.g., "Детские товары / Игрушка")
+    form: llm
+
+output:
+  should_be_plural:
+    type: boolean
+    description: Whether the category should be in plural form
+  suggested_name:
+    type: string
+    description: Suggested correct category name
+  reason:
+    type: string
+    description: LLM explanation for the suggestion
+
+api:
+  method: POST
+  url: https://catalog-validator.onrender.com/api/analyze-category
+  headers:
+    Content-Type: application/json
+  body:
+    name: "{{name}}"
+    path: "{{path}}"

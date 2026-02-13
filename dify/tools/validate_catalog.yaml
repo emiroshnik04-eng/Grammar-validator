@@ -1,0 +1,65 @@
+identity:
+  name: validate_catalog
+  author: Grammar Validator Team
+  label:
+    en_US: Validate Catalog
+    ru_RU: Валидировать каталог
+  icon: validate.svg
+
+description:
+  human:
+    en_US: Validates a CSV catalog file for grammar, spelling, and case agreement errors in Russian language
+    ru_RU: Проверяет CSV файл каталога на грамматические, орфографические ошибки и согласование падежей в русском языке
+  llm: |
+    This tool validates product catalog CSV files for Russian language grammar errors:
+    - Spelling and grammar checking using LanguageTool
+    - Case agreement validation (genitive, nominative, etc.)
+    - Gender agreement for "Другой/Другая/Другое" patterns
+    - Case consistency within parameter groups
+    - Proper noun detection to avoid incorrect pluralization
+
+    Returns a task_id that can be used to track validation progress and download results.
+
+parameters:
+  - name: file_path
+    type: string
+    required: true
+    label:
+      en_US: CSV File Path
+      ru_RU: Путь к CSV файлу
+    human_description:
+      en_US: Path to the CSV file to validate (must be accessible)
+      ru_RU: Путь к CSV файлу для валидации (должен быть доступен)
+    llm_description: The file path of the CSV catalog file to validate
+    form: llm
+
+  - name: file_content
+    type: file
+    required: false
+    label:
+      en_US: CSV File Content
+      ru_RU: Содержимое CSV файла
+    human_description:
+      en_US: Direct file upload (alternative to file_path)
+      ru_RU: Прямая загрузка файла (альтернатива file_path)
+    llm_description: Direct CSV file content to validate (as alternative to file_path)
+    form: form
+
+output:
+  task_id:
+    type: string
+    description: Unique task identifier for tracking validation progress
+  message:
+    type: string
+    description: Status message
+  status_url:
+    type: string
+    description: URL to check validation status and get results
+
+api:
+  method: POST
+  url: https://catalog-validator.onrender.com/api/validate
+  headers:
+    Content-Type: multipart/form-data
+  body:
+    file: "{{file_content}}"

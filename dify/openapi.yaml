@@ -1,0 +1,245 @@
+openapi: 3.0.0
+info:
+  title: Catalog Grammar Validator API
+  description: |
+    API для валидации грамматики и согласования в каталогах товаров.
+    Поддерживает проверку русского языка с использованием pymorphy3 и LanguageTool.
+  version: 1.0.0
+  contact:
+    name: Grammar Validator Support
+    url: https://catalog-validator.onrender.com
+
+servers:
+  - url: https://catalog-validator.onrender.com
+    description: Production server
+
+paths:
+  /api/validate:
+    post:
+      summary: Validate CSV catalog file
+      description: |
+        Загружает CSV файл с каталогом товаров и выполняет валидацию:
+        - Проверка грамматики и орфографии
+        - Согласование падежей и родов
+        - Проверка паттернов "Другой/Другая/Другое"
+        - Консистентность регистра в параметрах
+      operationId: validateCatalog
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV файл с данными каталога
+      responses:
+        '200':
+          description: Validation completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id:
+                    type: string
+                    format: uuid
+                    description: ID задачи для отслеживания прогресса
+                  message:
+                    type: string
+                    example: "Validation started"
+        '400':
+          description: Bad request (invalid file or format)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/progress/{task_id}:
+    get:
+      summary: Get validation progress and result
+      description: Получить прогресс и результаты валидации по ID задачи
+      operationId: getValidationProgress
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID задачи валидации
+      responses:
+        '200':
+          description: Validation progress and result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [processing, completed, error]
+                    description: Статус валидации
+                  progress:
+                    type: integer
+                    minimum: 0
+                    maximum: 100
+                    description: Прогресс выполнения (0-100%)
+                  errors_found:
+                    type: integer
+                    description: Количество найденных ошибок
+                  result_url:
+                    type: string
+                    description: URL для скачивания результатов (если статус completed)
+                  message:
+                    type: string
+                    description: Сообщение о статусе
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/download/{filename}:
+    get:
+      summary: Download validation results
+      description: Скачать файл с результатами валидации
+      operationId: downloadResults
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Имя файла для скачивания
+      responses:
+        '200':
+          description: Excel file with validation results
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/health:
+    get:
+      summary: Health check
+      description: Проверка работоспособности сервиса
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  llm_configured:
+                    type: boolean
+                    description: LLM API ключ настроен
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /api/analyze-category:
+    post:
+      summary: Analyze category name using LLM
+      description: |
+        Использует LLM для анализа названия категории и предложения
+        правильной формы (единственное/множественное число).
+      operationId: analyzeCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - path
+              properties:
+                name:
+                  type: string
+                  description: Текущее название категории
+                  example: "Игрушка"
+                path:
+                  type: string
+                  description: Полный путь категории для контекста
+                  example: "Детские товары / Игрушка"
+      responses:
+        '200':
+          description: Suggestion generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  should_be_plural:
+                    type: boolean
+                    description: Должно ли название быть во множественном числе
+                  suggested_name:
+                    type: string
+                    description: Предложенное название
+                    example: "Игрушки"
+                  reason:
+                    type: string
+                    description: Объяснение от LLM
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: LLM service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Error:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Invalid file format"
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication (if enabled)
+
+security: []
