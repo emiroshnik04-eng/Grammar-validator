@@ -1,0 +1,78 @@
+# GitLab CI/CD Configuration
+# Автоматический деплой на Kubernetes при push в main ветку
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_IMAGE: registry.gitlab.lalafo.com.ua/ekaterina.miroshnik/catalog-grammar-validator
+  KUBE_NAMESPACE: default  # Замените на ваш namespace
+
+# Этап 1: Тестирование
+test:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - apt-get update && apt-get install -y gcc g++
+    - pip install -r requirements.txt
+  script:
+    - python -m py_compile web_app.py
+    - python -m py_compile check_catalog.py
+    - echo "✅ Syntax check passed"
+  only:
+    - main
+    - merge_requests
+
+# Этап 2: Сборка Docker образа
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE:$CI_COMMIT_SHA .
+    - docker tag $DOCKER_IMAGE:$CI_COMMIT_SHA $DOCKER_IMAGE:latest
+    - docker push $DOCKER_IMAGE:$CI_COMMIT_SHA
+    - docker push $DOCKER_IMAGE:latest
+    - echo "✅ Docker image built and pushed"
+  only:
+    - main
+
+# Этап 3: Деплой на Kubernetes
+deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  before_script:
+    - kubectl config use-context $KUBE_CONTEXT
+  script:
+    # Применяем манифесты
+    - kubectl apply -f kubernetes/deployment.yaml -n $KUBE_NAMESPACE
+    - kubectl apply -f kubernetes/service.yaml -n $KUBE_NAMESPACE
+    - kubectl apply -f kubernetes/ingress.yaml -n $KUBE_NAMESPACE
+
+    # Ждём обновления
+    - kubectl rollout status deployment/catalog-validator -n $KUBE_NAMESPACE --timeout=5m
+
+    # Проверяем health
+    - kubectl get pods -n $KUBE_NAMESPACE -l app=catalog-validator
+
+    - echo "✅ Deployment successful!"
+    - echo "🌐 URL: https://catalog-validator.yallasvc.net"
+  only:
+    - main
+  when: manual  # Ручной запуск для безопасности (можно убрать когда уверены)
+
+# Этап 3 (альтернатива): Деплой с Helm (если используете Helm)
+# deploy-helm:
+#   stage: deploy
+#   image: alpine/helm:latest
+#   script:
+#     - helm upgrade --install catalog-validator ./helm/catalog-validator \
+#         --namespace $KUBE_NAMESPACE \
+#         --set image.tag=$CI_COMMIT_SHA
+#   only:
+#     - main

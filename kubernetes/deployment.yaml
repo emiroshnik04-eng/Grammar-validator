@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-validator
+  labels:
+    app: catalog-validator
+spec:
+  replicas: 2  # Две копии для надёжности
+  selector:
+    matchLabels:
+      app: catalog-validator
+  template:
+    metadata:
+      labels:
+        app: catalog-validator
+    spec:
+      containers:
+      - name: catalog-validator
+        image: registry.gitlab.lalafo.com.ua/ekaterina.miroshnik/catalog-grammar-validator:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: catalog-validator-secrets
+              key: openai-api-key
+        - name: LLM_API_URL
+          value: "https://api.openai.com/v1/chat/completions"
+        - name: LLM_MODEL
+          value: "gpt-4-turbo"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: SERVER_HOST
+          value: "0.0.0.0"
+        - name: SERVER_PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: uploads
+          mountPath: /app/uploads
+        - name: results
+          mountPath: /app/results
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: uploads
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: results
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: catalog-validator-secrets
+type: Opaque
+stringData:
+  openai-api-key: "ЗАМЕНИТЕ_НА_ВАШ_КЛЮЧ"  # DevOps заменит на реальный ключ

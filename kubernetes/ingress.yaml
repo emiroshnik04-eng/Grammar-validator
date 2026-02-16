@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: catalog-validator
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Если используете cert-manager для SSL
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"  # Максимальный размер загружаемого файла
+spec:
+  tls:
+  - hosts:
+    - catalog-validator.yallasvc.net
+    secretName: catalog-validator-tls
+  rules:
+  - host: catalog-validator.yallasvc.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: catalog-validator
+            port:
+              number: 80
