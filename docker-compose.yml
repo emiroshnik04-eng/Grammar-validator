@@ -1,0 +1,27 @@
+# Docker Compose для локального запуска
+# Использование: docker-compose up
+
+version: '3.8'
+
+services:
+  catalog-validator:
+    build: .
+    container_name: catalog-validator
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your_api_key_here}
+      - LLM_API_URL=https://api.openai.com/v1/chat/completions
+      - LLM_MODEL=gpt-4-turbo
+      - ENVIRONMENT=development
+    volumes:
+      # Монтируем директории для отладки (опционально)
+      - ./uploads:/app/uploads
+      - ./results:/app/results
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
